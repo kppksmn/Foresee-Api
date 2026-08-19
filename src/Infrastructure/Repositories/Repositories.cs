@@ -1,0 +1,201 @@
+using System.Data;
+using System.Security.Cryptography;
+using System.Text;
+using Core.DTOs;
+using Core.Entities;
+using Core.Interfaces;
+using Dapper;
+using Microsoft.Extensions.Configuration;
+using Npgsql;
+
+namespace Infrastructure.Repositories;
+
+public class DbConnectionFactory
+{
+    private readonly string _connectionString;
+    public DbConnectionFactory(IConfiguration configuration)
+    {
+        _connectionString = configuration.GetConnectionString("PostgreSQL") 
+            ?? throw new InvalidOperationException("PostgreSQL connection string is not configured.");
+    }
+    public IDbConnection CreateConnection() => new NpgsqlConnection(_connectionString);
+}
+
+public class PasswordHasher
+{
+    public static string HashPassword(string password)
+    {
+        using var sha256 = SHA256.Create();
+        var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+        return Convert.ToBase64String(bytes);
+    }
+
+    public static bool VerifyPassword(string password, string hash)
+    {
+        return HashPassword(password) == hash;
+    }
+}
+
+public class UserRepository
+{
+    private readonly DbConnectionFactory _db;
+    public UserRepository(DbConnectionFactory db) => _db = db;
+
+    public async Task<User?> GetByUsernameAsync(string username, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = "SELECT id, username, password_hash AS PasswordHash, role, is_active AS IsActive, last_login_at AS LastLoginAt FROM users WHERE username = @username AND deleted_at IS NULL;";
+        return await conn.QueryFirstOrDefaultAsync<User>(new CommandDefinition(sql, new { username }, cancellationToken: ct));
+    }
+
+    public async Task<User?> GetByIdAsync(long id, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = "SELECT * FROM users WHERE id = @id AND deleted_at IS NULL;";
+        return await conn.QueryFirstOrDefaultAsync<User>(new CommandDefinition(sql, new { id }, cancellationToken: ct));
+    }
+
+    public async Task<long> CreateUserAsync(User user, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            INSERT INTO users (username, password_hash, role, is_active, created_by, created_at)
+            VALUES (@Username, @PasswordHash, @Role, @IsActive, @CreatedBy, @CreatedAt)
+            RETURNING id;";
+        return await conn.ExecuteScalarAsync<long>(new CommandDefinition(sql, user, cancellationToken: ct));
+    }
+}
+
+public class UserProfileRepository
+{
+    private readonly DbConnectionFactory _db;
+    public UserProfileRepository(DbConnectionFactory db) => _db = db;
+
+    public async Task<UserProfile?> GetByUserIdAsync(long userId, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = "SELECT * FROM user_profiles WHERE user_id = @userId AND is_active = TRUE AND deleted_at IS NULL;";
+        return await conn.QueryFirstOrDefaultAsync<UserProfile>(new CommandDefinition(sql, new { userId }, cancellationToken: ct));
+    }
+
+    public async Task<UserProfile?> GetByIdAsync(long id, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = "SELECT * FROM user_profiles WHERE id = @id AND is_active = TRUE AND deleted_at IS NULL;";
+        return await conn.QueryFirstOrDefaultAsync<UserProfile>(new CommandDefinition(sql, new { id }, cancellationToken: ct));
+    }
+
+    public async Task<long> CreateUserProfileAsync(UserProfile profile, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            INSERT INTO user_profiles (user_id, employee_code, first_name, last_name, phone, email, id_card_no, birth_date, license_no, license_issue_date, license_expiration_date, vehicle_id, is_active, created_by, created_at)
+            VALUES (@UserId, @EmployeeCode, @FirstName, @LastName, @Phone, @Email, @IdCardNo, @BirthDate, @LicenseNo, @LicenseIssueDate, @LicenseExpirationDate, @VehicleId, @IsActive, @CreatedBy, @CreatedAt)
+            RETURNING id;";
+        return await conn.ExecuteScalarAsync<long>(new CommandDefinition(sql, profile, cancellationToken: ct));
+    }
+}
+
+public class JobRepository
+{
+    private readonly DbConnectionFactory _db;
+    public JobRepository(DbConnectionFactory db) => _db = db;
+
+    public async Task<Job?> GetByIdAndDriverAsync(long jobId, long driverId, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = "SELECT * FROM jobs WHERE id = @jobId AND driver_id = @driverId AND deleted_at IS NULL;";
+        return await conn.QueryFirstOrDefaultAsync<Job>(new CommandDefinition(sql, new { jobId, driverId }, cancellationToken: ct));
+    }
+
+    public async Task<Job?> GetByIdAsync(long jobId, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = "SELECT * FROM jobs WHERE id = @jobId AND deleted_at IS NULL;";
+        return await conn.QueryFirstOrDefaultAsync<Job>(new CommandDefinition(sql, new { jobId }, cancellationToken: ct));
+    }
+
+    public async Task<IEnumerable<JobDto>> GetJobsForDriverAsync(long driverId, string? status, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        var sql = @"
+            SELECT j.id, j.job_number as JobNumber, j.title, j.description, j.driver_id as DriverId,
+                   COALESCE(NULLIF(TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')), ''), u.username, 'พนักงาน #' || CAST(j.driver_id AS TEXT)) as DriverName,
+                   j.vehicle_id as VehicleId,
+                   v.plate_number as VehiclePlate, j.status, j.pickup_location as PickupLocation,
+                   j.scheduled_start_at as ScheduledStartAt,
+                   j.started_at as StartedAt, j.arrived_at as ArrivedAt, j.completed_at as CompletedAt,
+                   j.cancelled_at as CancelledAt, j.cancellation_reason as CancellationReason
+            FROM jobs j
+            LEFT JOIN user_profiles p ON p.user_id = j.driver_id
+            LEFT JOIN users u ON u.id = j.driver_id
+            LEFT JOIN vehicles v ON j.vehicle_id = v.id
+            WHERE j.driver_id = @driverId AND j.deleted_at IS NULL";
+
+        if (!string.IsNullOrEmpty(status))
+        {
+            sql += " AND j.status = @status";
+        }
+        sql += " ORDER BY j.created_at DESC;";
+
+        return await conn.QueryAsync<JobDto>(new CommandDefinition(sql, new { driverId, status }, cancellationToken: ct));
+    }
+
+    public async Task<bool> UpdateStatusAtomicAsync(long jobId, string expectedStatus, string newStatus, long userId, DateTime actionTime, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        string updateColumn = newStatus switch
+        {
+            "Started" => ", started_at = @actionTime",
+            "Arrived" => ", arrived_at = @actionTime",
+            "Completed" => ", completed_at = @actionTime",
+            _ => ""
+        };
+
+        string sql = $@"
+            UPDATE jobs 
+            SET status = @newStatus, row_version = row_version + 1, updated_at = @actionTime, updated_by = @userId {updateColumn}
+            WHERE id = @jobId AND status = @expectedStatus AND deleted_at IS NULL;";
+
+        int affected = await conn.ExecuteAsync(new CommandDefinition(sql, new { jobId, expectedStatus, newStatus, userId, actionTime }, transaction: tx, cancellationToken: ct));
+        if (affected == 0)
+        {
+            tx.Rollback();
+            return false;
+        }
+
+        const string historySql = @"
+            INSERT INTO job_status_histories (job_id, from_status, to_status, changed_by, created_at)
+            VALUES (@jobId, @expectedStatus, @newStatus, @userId, @actionTime);";
+
+        await conn.ExecuteAsync(new CommandDefinition(historySql, new { jobId, expectedStatus, newStatus, userId, actionTime }, transaction: tx, cancellationToken: ct));
+
+        tx.Commit();
+        return true;
+    }
+}
+
+public class AuditLogRepository
+{
+    private readonly DbConnectionFactory _db;
+    public AuditLogRepository(DbConnectionFactory db) => _db = db;
+
+    public async Task LogAsync(long? userId, string action, string entityName, string? entityId = null, string? details = null, string? ipAddress = null, CancellationToken ct = default)
+    {
+        try
+        {
+            using var conn = _db.CreateConnection();
+            const string sql = @"
+                INSERT INTO audit_logs (user_id, action, entity_name, entity_id, details, ip_address, created_at)
+                VALUES (@userId, @action, @entityName, @entityId, @details, @ipAddress, CURRENT_TIMESTAMP);";
+            await conn.ExecuteAsync(new CommandDefinition(sql, new { userId, action, entityName, entityId, details, ipAddress }, cancellationToken: ct));
+        }
+        catch
+        {
+            // Do not fail main operation if audit logging fails
+        }
+    }
+}

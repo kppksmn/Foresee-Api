@@ -1,0 +1,34 @@
+## Build and IDE outputs
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+.vs/
+.vscode/
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+## User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Sensitive configuration / secrets
+appsettings.Development.json
+appsettings.Local.json
+*.env
+
+## OS Generated Files
+.DS_Store
+Thumbs.db
+
+## Test results & coverage
+TestResults/
+*.coverage
+
+## Docker & Temporary files
+.docker/

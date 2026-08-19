@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  foresee-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__PostgreSQL=Host=host.docker.internal;Port=5432;Database=foresee;Username=postgres;Password=postgres123
+      - Jwt__Issuer=ForeseeAPI
+      - Jwt__Audience=ForeseeClients
+      - Jwt__Key=super_secret_key_that_is_long_enough_123456_driver_work_management_key
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
