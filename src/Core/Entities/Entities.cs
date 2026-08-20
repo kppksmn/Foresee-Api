@@ -71,7 +71,6 @@ public class Job
     public string? ContactName { get; set; }
     public string? ContactPhone { get; set; }
     public string? Companions { get; set; }
-    public string DropoffLocation { get; set; } = string.Empty;
     public DateTime? ScheduledStartAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? ArrivedAt { get; set; }
@@ -109,3 +108,35 @@ public class AuditLog
     public string? IpAddress { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
+
+public class UserDevice
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public string DeviceId { get; set; } = string.Empty;
+    public string? DeviceName { get; set; }
+    public string? DeviceModel { get; set; }
+    public string? AppVersion { get; set; }
+    public string? FcmToken { get; set; }
+    public string? IpAddress { get; set; }
+    public bool IsActive { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAt { get; set; }
+    public DateTime? DeletedAt { get; set; }
+}
+
+public class NotificationOutbox
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Body { get; set; } = string.Empty;
+    public string? PayloadJson { get; set; }
+    public bool IsProcessed { get; set; }
+    public DateTime? ProcessedAt { get; set; }
+    public bool IsRead { get; set; }
+    public DateTime? ReadAt { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+

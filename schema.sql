@@ -1,32 +1,12 @@
--- PostgreSQL Schema for Driver Work Management API
+-- PostgreSQL Schema & Seeds for Foresee Driver Work Management API
 
 CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
-    username VARCHAR(100) NOT NULL UNIQUE,
+    username VARCHAR(100) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(50) NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     last_login_at TIMESTAMPTZ NULL,
-    created_by BIGINT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_by BIGINT NULL,
-    updated_at TIMESTAMPTZ NULL,
-    deleted_by BIGINT NULL,
-    deleted_at TIMESTAMPTZ NULL
-);
-
-CREATE TABLE IF NOT EXISTS drivers (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE RESTRICT,
-    employee_code VARCHAR(50) NOT NULL UNIQUE,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    phone VARCHAR(20) NOT NULL,
-    email VARCHAR(255) NULL,
-    license_no VARCHAR(100) NOT NULL,
-    license_issue_date DATE NOT NULL,
-    license_expiration_date DATE NOT NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_by BIGINT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by BIGINT NULL,
@@ -51,7 +31,31 @@ CREATE TABLE IF NOT EXISTS vehicles (
     id BIGSERIAL PRIMARY KEY,
     plate_number VARCHAR(50) NOT NULL UNIQUE,
     model VARCHAR(100) NOT NULL,
+    vehicle_type_id BIGINT NULL REFERENCES vehicle_types(id) ON DELETE SET NULL,
     capacity DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by BIGINT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by BIGINT NULL,
+    updated_at TIMESTAMPTZ NULL,
+    deleted_by BIGINT NULL,
+    deleted_at TIMESTAMPTZ NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    employee_code VARCHAR(50) NOT NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    id_card_no VARCHAR(20) NULL,
+    phone VARCHAR(20) NOT NULL,
+    email VARCHAR(255) NULL,
+    birth_date DATE NULL,
+    license_no VARCHAR(100) NULL,
+    license_issue_date DATE NULL,
+    license_expiration_date DATE NULL,
+    vehicle_id BIGINT NULL REFERENCES vehicles(id) ON DELETE SET NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_by BIGINT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -76,7 +80,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     job_number VARCHAR(50) NOT NULL UNIQUE,
     title VARCHAR(200) NOT NULL,
     description TEXT NULL,
-    driver_id BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+    driver_id BIGINT NULL REFERENCES user_profiles(id) ON DELETE SET NULL,
     vehicle_id BIGINT NULL REFERENCES vehicles(id) ON DELETE SET NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'Pending',
     pickup_location TEXT NOT NULL,
@@ -85,7 +89,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     contact_name VARCHAR(200) NULL,
     contact_phone VARCHAR(50) NULL,
     companions TEXT NULL,
-    dropoff_location TEXT NULL,
     scheduled_start_at TIMESTAMPTZ NULL,
     started_at TIMESTAMPTZ NULL,
     arrived_at TIMESTAMPTZ NULL,
@@ -114,7 +117,7 @@ CREATE TABLE IF NOT EXISTS job_status_histories (
 CREATE TABLE IF NOT EXISTS job_assignment_histories (
     id BIGSERIAL PRIMARY KEY,
     job_id BIGINT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-    driver_id BIGINT NOT NULL REFERENCES drivers(id),
+    driver_id BIGINT NOT NULL REFERENCES user_profiles(id),
     assigned_by BIGINT NOT NULL REFERENCES users(id),
     assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     unassigned_at TIMESTAMPTZ NULL
@@ -131,21 +134,42 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS user_devices (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id VARCHAR(255) NOT NULL,
+    device_name VARCHAR(255) NULL,
+    device_model VARCHAR(255) NULL,
+    app_version VARCHAR(50) NULL,
+    fcm_token TEXT NULL,
+    ip_address VARCHAR(50) NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NULL,
+    deleted_at TIMESTAMPTZ NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NULL,
     action VARCHAR(100) NOT NULL,
     entity_name VARCHAR(100) NOT NULL,
     entity_id VARCHAR(100) NULL,
+    details TEXT NULL,
     details_json TEXT NULL,
     ip_address VARCHAR(50) NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Indexes for performance
+-- Partial Unique Indexes
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username_active ON users(username) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_profiles_employee_code_active ON user_profiles(employee_code) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_profiles_id_card_no_active ON user_profiles(id_card_no) WHERE deleted_at IS NULL AND id_card_no IS NOT NULL AND id_card_no != '';
+
+-- Performance Indexes
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_drivers_user_id ON drivers(user_id);
-CREATE INDEX IF NOT EXISTS idx_drivers_employee_code ON drivers(employee_code);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_employee_code ON user_profiles(employee_code);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_driver_id ON jobs(driver_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
@@ -153,3 +177,30 @@ CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at);
 CREATE INDEX IF NOT EXISTS idx_job_status_histories_job_id ON job_status_histories(job_id);
 CREATE INDEX IF NOT EXISTS idx_job_assignment_histories_job_id ON job_assignment_histories(job_id);
 CREATE INDEX IF NOT EXISTS idx_notification_outbox_unprocessed ON notification_outbox(is_processed) WHERE is_processed = FALSE;
+
+-- Seeds: Default Admin (admin / admin123)
+INSERT INTO users (username, password_hash, role, is_active, created_at)
+VALUES ('admin', 'jZae727K08KaOmKSgOaGzww/XVqGr/hqqPRmaNpPB1I=', 'Admin', TRUE, CURRENT_TIMESTAMP)
+ON CONFLICT DO NOTHING;
+
+-- Seeds: Vehicle Types
+INSERT INTO vehicle_types (name, description) VALUES
+('รถกระบะ 4 ล้อ (Pick-up Truck)', 'รถกระบะบรรทุกทึบ/ตู้เย็น'),
+('รถบรรทุก 6 ล้อ (Medium Truck)', 'รถบรรทุก 6 ล้อตู้แห้ง/พื้นเรียบ'),
+('รถบรรทุก 10 ล้อ (Heavy Truck)', 'รถบรรทุก 10 ล้อตู้แห้ง/พื้นเรียบ'),
+('รถหัวลาก (Trailer / Tractor)', 'รถบรรทุกคอนเทนเนอร์')
+ON CONFLICT (name) DO NOTHING;
+
+-- Seeds: Sample Vehicles
+INSERT INTO vehicles (plate_number, model, vehicle_type_id, capacity, is_active, created_at)
+SELECT '1กข-1234', 'Isuzu D-Max 1.9 Ddi', id, 1.5, TRUE, CURRENT_TIMESTAMP FROM vehicle_types WHERE name = 'รถกระบะ 4 ล้อ (Pick-up Truck)'
+ON CONFLICT (plate_number) DO NOTHING;
+
+INSERT INTO vehicles (plate_number, model, vehicle_type_id, capacity, is_active, created_at)
+SELECT '70-5678', 'Hino 500 Victor 260HP', id, 8.0, TRUE, CURRENT_TIMESTAMP FROM vehicle_types WHERE name = 'รถบรรทุก 6 ล้อ (Medium Truck)'
+ON CONFLICT (plate_number) DO NOTHING;
+
+INSERT INTO vehicles (plate_number, model, vehicle_type_id, capacity, is_active, created_at)
+SELECT '71-9988', 'Isuzu GXZ 360', id, 15.0, TRUE, CURRENT_TIMESTAMP FROM vehicle_types WHERE name = 'รถบรรทุก 10 ล้อ (Heavy Truck)'
+ON CONFLICT (plate_number) DO NOTHING;
+

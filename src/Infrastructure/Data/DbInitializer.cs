@@ -54,8 +54,15 @@ public static class DbInitializer
             ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS id_card_no VARCHAR(20) NULL;
 
             -- Drop old foreign key constraints on existing tables that referenced drivers table
-            ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_driver_id_fkey;
-            ALTER TABLE job_assignment_histories DROP CONSTRAINT IF EXISTS job_assignment_histories_driver_id_fkey;
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'jobs') THEN
+                    ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_driver_id_fkey;
+                END IF;
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'job_assignment_histories') THEN
+                    ALTER TABLE job_assignment_histories DROP CONSTRAINT IF EXISTS job_assignment_histories_driver_id_fkey;
+                END IF;
+            END $$;
 
             -- Always drop drivers table explicitly
             DROP TABLE IF EXISTS drivers CASCADE;
@@ -122,7 +129,6 @@ public static class DbInitializer
                 pickup_location TEXT NOT NULL,
                 pickup_lat DOUBLE PRECISION NULL,
                 pickup_lng DOUBLE PRECISION NULL,
-                dropoff_location TEXT NULL,
                 scheduled_start_at TIMESTAMPTZ NULL,
                 started_at TIMESTAMPTZ NULL,
                 arrived_at TIMESTAMPTZ NULL,
@@ -143,59 +149,8 @@ public static class DbInitializer
             ALTER TABLE jobs ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(50) NULL;
             ALTER TABLE jobs ADD COLUMN IF NOT EXISTS companions TEXT NULL;
             ALTER TABLE jobs ADD COLUMN IF NOT EXISTS updated_by BIGINT NULL;
-            ALTER TABLE jobs ALTER COLUMN dropoff_location DROP NOT NULL;
-
-            -- Reorder columns in jobs table if contact_name exists before audit columns in PostgreSQL
-            DO $$
-            BEGIN
-                IF EXISTS (
-                    SELECT 1 FROM information_schema.columns 
-                    WHERE table_name='jobs' AND column_name='contact_name'
-                ) THEN
-                    -- Perform column reordering via temporary table to ensure audit columns are at the end
-                    CREATE TABLE jobs_new (
-                        id BIGSERIAL PRIMARY KEY,
-                        job_number VARCHAR(50) NOT NULL UNIQUE,
-                        title VARCHAR(200) NOT NULL,
-                        description TEXT NULL,
-                        driver_id BIGINT NULL,
-                        vehicle_id BIGINT NULL,
-                        status VARCHAR(50) NOT NULL DEFAULT 'Pending',
-                        pickup_location TEXT NOT NULL,
-                        pickup_lat DOUBLE PRECISION NULL,
-                        pickup_lng DOUBLE PRECISION NULL,
-                        contact_name VARCHAR(200) NULL,
-                        contact_phone VARCHAR(50) NULL,
-                        companions TEXT NULL,
-                        dropoff_location TEXT NULL,
-                        scheduled_start_at TIMESTAMPTZ NULL,
-                        started_at TIMESTAMPTZ NULL,
-                        arrived_at TIMESTAMPTZ NULL,
-                        completed_at TIMESTAMPTZ NULL,
-                        cancelled_at TIMESTAMPTZ NULL,
-                        cancellation_reason TEXT NULL,
-                        row_version INT NOT NULL DEFAULT 1,
-                        created_by BIGINT NULL,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        updated_by BIGINT NULL,
-                        updated_at TIMESTAMPTZ NULL,
-                        deleted_by BIGINT NULL,
-                        deleted_at TIMESTAMPTZ NULL
-                    );
-
-                    INSERT INTO jobs_new (id, job_number, title, description, driver_id, vehicle_id, status, pickup_location, pickup_lat, pickup_lng, contact_name, contact_phone, companions, dropoff_location, scheduled_start_at, started_at, arrived_at, completed_at, cancelled_at, cancellation_reason, row_version, created_by, created_at, updated_by, updated_at, deleted_by, deleted_at)
-                    SELECT id, job_number, title, description, driver_id, vehicle_id, status, pickup_location, pickup_lat, pickup_lng, contact_name, contact_phone, companions, dropoff_location, scheduled_start_at, started_at, arrived_at, completed_at, cancelled_at, cancellation_reason, row_version, created_by, created_at, updated_by, updated_at, deleted_by, deleted_at
-                    FROM jobs;
-
-                    DROP TABLE jobs CASCADE;
-                    ALTER TABLE jobs_new RENAME TO jobs;
-
-                    PERFORM setval(pg_get_serial_sequence('jobs', 'id'), COALESCE(MAX(id), 1)) FROM jobs;
-                END IF;
-            EXCEPTION WHEN OTHERS THEN
-                -- If table already reordered or error, continue safely
-                NULL;
-            END $$;
+            ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancelled_by BIGINT NULL;
+            ALTER TABLE jobs DROP COLUMN IF EXISTS dropoff_location;
 
             CREATE TABLE IF NOT EXISTS job_status_histories (
                 id BIGSERIAL PRIMARY KEY,
@@ -227,8 +182,13 @@ public static class DbInitializer
                 payload_json TEXT NULL,
                 is_processed BOOLEAN NOT NULL DEFAULT FALSE,
                 processed_at TIMESTAMPTZ NULL,
+                is_read BOOLEAN NOT NULL DEFAULT FALSE,
+                read_at TIMESTAMPTZ NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+
+            ALTER TABLE notification_outbox ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE notification_outbox ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ NULL;
 
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id BIGSERIAL PRIMARY KEY,

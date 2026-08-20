@@ -101,11 +101,15 @@ public class JobRepository
     private readonly DbConnectionFactory _db;
     public JobRepository(DbConnectionFactory db) => _db = db;
 
-    public async Task<Job?> GetByIdAndDriverAsync(long jobId, long driverId, CancellationToken ct = default)
+    public async Task<Job?> GetByIdAndDriverAsync(long jobId, long userId, long driverProfileId = 0, CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
-        const string sql = "SELECT * FROM jobs WHERE id = @jobId AND driver_id = @driverId AND deleted_at IS NULL;";
-        return await conn.QueryFirstOrDefaultAsync<Job>(new CommandDefinition(sql, new { jobId, driverId }, cancellationToken: ct));
+        const string sql = @"
+            SELECT * FROM jobs 
+            WHERE id = @jobId 
+              AND (driver_id = @userId OR (@driverProfileId > 0 AND driver_id = @driverProfileId)) 
+              AND deleted_at IS NULL;";
+        return await conn.QueryFirstOrDefaultAsync<Job>(new CommandDefinition(sql, new { jobId, userId, driverProfileId }, cancellationToken: ct));
     }
 
     public async Task<Job?> GetByIdAsync(long jobId, CancellationToken ct = default)
@@ -113,6 +117,157 @@ public class JobRepository
         using var conn = _db.CreateConnection();
         const string sql = "SELECT * FROM jobs WHERE id = @jobId AND deleted_at IS NULL;";
         return await conn.QueryFirstOrDefaultAsync<Job>(new CommandDefinition(sql, new { jobId }, cancellationToken: ct));
+    }
+
+    public async Task<JobDto?> GetJobDetailForDriverAsync(long jobId, long userId, long driverProfileId = 0, bool isAdmin = false, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        var sql = @"
+            SELECT j.id, j.job_number as JobNumber, j.title, j.description, j.driver_id as DriverId,
+                   COALESCE(NULLIF(TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')), ''), u.username, 'พนักงาน #' || CAST(j.driver_id AS TEXT)) as DriverName,
+                   j.vehicle_id as VehicleId,
+                   v.plate_number as VehiclePlate,
+                   vt.name as VehicleType,
+                   j.status, j.pickup_location as PickupLocation,
+                   j.pickup_lat as PickupLat, j.pickup_lng as PickupLng,
+                   j.contact_name as ContactName, j.contact_phone as ContactPhone,
+                   j.companions as Companions,
+                   j.scheduled_start_at as ScheduledStartAt,
+                   j.started_at as StartedAt, j.arrived_at as ArrivedAt, j.completed_at as CompletedAt,
+                   j.cancelled_at as CancelledAt, j.cancellation_reason as CancellationReason,
+                   j.cancelled_by as CancelledBy,
+                   COALESCE(
+                       NULLIF(TRIM(COALESCE(cb_p.first_name, '') || ' ' || COALESCE(cb_p.last_name, '')), ''),
+                       cb_u.username,
+                       (
+                           SELECT COALESCE(NULLIF(TRIM(COALESCE(h_p.first_name, '') || ' ' || COALESCE(h_p.last_name, '')), ''), h_u.username)
+                           FROM job_status_histories h
+                           JOIN users h_u ON h_u.id = h.changed_by
+                           LEFT JOIN user_profiles h_p ON h_p.user_id = h_u.id AND h_p.deleted_at IS NULL
+                           WHERE h.job_id = j.id AND h.to_status = 'Cancelled'
+                           ORDER BY h.created_at DESC
+                           LIMIT 1
+                       )
+                   ) as CancelledByName
+            FROM jobs j
+            LEFT JOIN user_profiles p ON p.user_id = j.driver_id
+            LEFT JOIN users u ON u.id = j.driver_id
+            LEFT JOIN vehicles v ON j.vehicle_id = v.id
+            LEFT JOIN vehicle_types vt ON v.vehicle_type_id = vt.id
+            LEFT JOIN users cb_u ON cb_u.id = j.cancelled_by AND cb_u.deleted_at IS NULL
+            LEFT JOIN user_profiles cb_p ON cb_p.user_id = cb_u.id AND cb_p.deleted_at IS NULL
+            WHERE j.id = @jobId 
+              AND (@isAdmin = TRUE OR j.driver_id = @userId OR (@driverProfileId > 0 AND j.driver_id = @driverProfileId))
+              AND j.deleted_at IS NULL;";
+
+        return await conn.QueryFirstOrDefaultAsync<JobDto>(new CommandDefinition(sql, new { jobId, userId, driverProfileId, isAdmin }, cancellationToken: ct));
+    }
+
+    public async Task<IEnumerable<JobDto>> GetUnfinishedJobsForDriverAsync(long userId, long driverProfileId = 0, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        var sql = @"
+            SELECT j.id, j.job_number as JobNumber, j.title, j.description, j.driver_id as DriverId,
+                   COALESCE(NULLIF(TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')), ''), u.username, 'พนักงาน #' || CAST(j.driver_id AS TEXT)) as DriverName,
+                   j.vehicle_id as VehicleId,
+                   v.plate_number as VehiclePlate,
+                   vt.name as VehicleType,
+                   j.status, j.pickup_location as PickupLocation,
+                   j.pickup_lat as PickupLat, j.pickup_lng as PickupLng,
+                   j.contact_name as ContactName, j.contact_phone as ContactPhone,
+                   j.companions as Companions,
+                   j.scheduled_start_at as ScheduledStartAt,
+                   j.started_at as StartedAt, j.arrived_at as ArrivedAt, j.completed_at as CompletedAt,
+                   j.cancelled_at as CancelledAt, j.cancellation_reason as CancellationReason
+            FROM jobs j
+            LEFT JOIN user_profiles p ON p.user_id = j.driver_id
+            LEFT JOIN users u ON u.id = j.driver_id
+            LEFT JOIN vehicles v ON j.vehicle_id = v.id
+            LEFT JOIN vehicle_types vt ON v.vehicle_type_id = vt.id
+            WHERE (j.driver_id = @userId OR (@driverProfileId > 0 AND j.driver_id = @driverProfileId))
+              AND j.status NOT IN ('Completed', 'Cancelled')
+              AND j.deleted_at IS NULL
+            ORDER BY j.scheduled_start_at ASC NULLS LAST, j.created_at DESC;";
+
+        return await conn.QueryAsync<JobDto>(new CommandDefinition(sql, new { userId, driverProfileId }, cancellationToken: ct));
+    }
+
+    public async Task<(IEnumerable<JobDto> Items, int TotalCount)> GetJobHistoryForDriverAsync(
+        long userId, 
+        long driverProfileId = 0, 
+        string? statusFilter = null,
+        int sqlOffset = 0, 
+        int pageSize = 25, 
+        CancellationToken ct = default)
+    {
+        if (pageSize < 1) pageSize = 25;
+        if (pageSize > 100) pageSize = 100;
+        if (sqlOffset < 0) sqlOffset = 0;
+
+        using var conn = _db.CreateConnection();
+        var countSql = @"
+            SELECT COUNT(1) 
+            FROM jobs j
+            WHERE (j.driver_id = @userId OR (@driverProfileId > 0 AND j.driver_id = @driverProfileId))
+              AND j.deleted_at IS NULL
+              AND (
+                CASE 
+                  WHEN @statusFilter = 'Completed' THEN j.status = 'Completed'
+                  WHEN @statusFilter = 'Cancelled' THEN j.status = 'Cancelled'
+                  ELSE j.status IN ('Completed', 'Cancelled')
+                END
+              );";
+
+        var totalCount = await conn.ExecuteScalarAsync<int>(new CommandDefinition(countSql, new { userId, driverProfileId, statusFilter }, cancellationToken: ct));
+
+        var sql = @"
+            SELECT j.id, j.job_number as JobNumber, j.title, j.description, j.driver_id as DriverId,
+                   COALESCE(NULLIF(TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')), ''), u.username, 'พนักงาน #' || CAST(j.driver_id AS TEXT)) as DriverName,
+                   j.vehicle_id as VehicleId,
+                   v.plate_number as VehiclePlate,
+                   vt.name as VehicleType,
+                   j.status, j.pickup_location as PickupLocation,
+                   j.pickup_lat as PickupLat, j.pickup_lng as PickupLng,
+                   j.contact_name as ContactName, j.contact_phone as ContactPhone,
+                   j.companions as Companions,
+                   j.scheduled_start_at as ScheduledStartAt,
+                   j.started_at as StartedAt, j.arrived_at as ArrivedAt, j.completed_at as CompletedAt,
+                   j.cancelled_at as CancelledAt, j.cancellation_reason as CancellationReason,
+                   j.cancelled_by as CancelledBy,
+                   COALESCE(
+                       NULLIF(TRIM(COALESCE(cb_p.first_name, '') || ' ' || COALESCE(cb_p.last_name, '')), ''),
+                       cb_u.username,
+                       (
+                           SELECT COALESCE(NULLIF(TRIM(COALESCE(h_p.first_name, '') || ' ' || COALESCE(h_p.last_name, '')), ''), h_u.username)
+                           FROM job_status_histories h
+                           JOIN users h_u ON h_u.id = h.changed_by
+                           LEFT JOIN user_profiles h_p ON h_p.user_id = h_u.id AND h_p.deleted_at IS NULL
+                           WHERE h.job_id = j.id AND h.to_status = 'Cancelled'
+                           ORDER BY h.created_at DESC
+                           LIMIT 1
+                       )
+                   ) as CancelledByName
+            FROM jobs j
+            LEFT JOIN user_profiles p ON p.user_id = j.driver_id
+            LEFT JOIN users u ON u.id = j.driver_id
+            LEFT JOIN vehicles v ON j.vehicle_id = v.id
+            LEFT JOIN vehicle_types vt ON v.vehicle_type_id = vt.id
+            LEFT JOIN users cb_u ON cb_u.id = j.cancelled_by AND cb_u.deleted_at IS NULL
+            LEFT JOIN user_profiles cb_p ON cb_p.user_id = cb_u.id AND cb_p.deleted_at IS NULL
+            WHERE (j.driver_id = @userId OR (@driverProfileId > 0 AND j.driver_id = @driverProfileId))
+              AND j.deleted_at IS NULL
+              AND (
+                CASE 
+                  WHEN @statusFilter = 'Completed' THEN j.status = 'Completed'
+                  WHEN @statusFilter = 'Cancelled' THEN j.status = 'Cancelled'
+                  ELSE j.status IN ('Completed', 'Cancelled')
+                END
+              )
+            ORDER BY COALESCE(j.updated_at, j.created_at) DESC
+            LIMIT @pageSize OFFSET @sqlOffset;";
+
+        var list = await conn.QueryAsync<JobDto>(new CommandDefinition(sql, new { userId, driverProfileId, statusFilter, pageSize, sqlOffset }, cancellationToken: ct));
+        return (list, totalCount);
     }
 
     public async Task<IEnumerable<JobDto>> GetJobsForDriverAsync(long driverId, string? status, CancellationToken ct = default)
@@ -123,6 +278,9 @@ public class JobRepository
                    COALESCE(NULLIF(TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')), ''), u.username, 'พนักงาน #' || CAST(j.driver_id AS TEXT)) as DriverName,
                    j.vehicle_id as VehicleId,
                    v.plate_number as VehiclePlate, j.status, j.pickup_location as PickupLocation,
+                   j.pickup_lat as PickupLat, j.pickup_lng as PickupLng,
+                   j.contact_name as ContactName, j.contact_phone as ContactPhone,
+                   j.companions as Companions,
                    j.scheduled_start_at as ScheduledStartAt,
                    j.started_at as StartedAt, j.arrived_at as ArrivedAt, j.completed_at as CompletedAt,
                    j.cancelled_at as CancelledAt, j.cancellation_reason as CancellationReason

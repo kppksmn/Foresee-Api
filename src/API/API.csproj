@@ -20,4 +20,8 @@
     <ProjectReference Include="..\Library\Library.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="firebase-admin.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('firebase-admin.json')" />
+  </ItemGroup>
+
 </Project>

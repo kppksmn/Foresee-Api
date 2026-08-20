@@ -17,6 +17,8 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddHttpContextAccessor();
 
+builder.Services.AddHttpClient();
+
 // DI Configuration
 builder.Services.AddSingleton<DbConnectionFactory>();
 builder.Services.AddScoped<UserRepository>();
@@ -24,6 +26,7 @@ builder.Services.AddScoped<UserProfileRepository>();
 builder.Services.AddScoped<JobRepository>();
 builder.Services.AddScoped<AuditLogRepository>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<PushNotificationService>();
 builder.Services.AddScoped<ICurrentUser, CurrentUser>();
 builder.Services.AddScoped<ICurrentDriver, CurrentDriver>();
 
@@ -47,7 +50,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("MobileAuthenticated", policy => policy.RequireAuthenticatedUser());
-    options.AddPolicy("MobileDriver", policy => policy.RequireAuthenticatedUser().RequireRole("Driver"));
+    options.AddPolicy("MobileDriver", policy => policy.RequireAuthenticatedUser().RequireRole("Driver", "Admin"));
     options.AddPolicy("MobileAdmin", policy => policy.RequireAuthenticatedUser().RequireRole("Admin"));
     options.AddPolicy("AdminOnly", policy => policy.RequireAuthenticatedUser().RequireRole("Admin"));
 });
@@ -57,9 +60,10 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("DefaultPolicy", policy =>
     {
-        policy.WithOrigins("http://localhost:3000", "http://localhost:5173", "http://localhost:5174")
+        policy.SetIsOriginAllowed(_ => true)
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 

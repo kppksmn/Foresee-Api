@@ -4,6 +4,7 @@ public class LoginRequestDto
 {
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
+    public int Channel { get; set; } = 1; // 1 = Admin Dashboard (Admin Only), 2 = Mobile (Admin & Driver)
 }
 
 public class RefreshTokenRequestDto
@@ -23,9 +24,17 @@ public record AuthResponseDto(
 
 public record LicenseInfoDto(
     string LicenseNo,
-    DateTime IssueDate,
-    DateTime ExpirationDate,
+    DateTime? IssueDate,
+    DateTime? ExpirationDate,
     string Status
+);
+
+public record VehicleInfoDto(
+    long Id,
+    string PlateNumber,
+    string Model,
+    string? VehicleType,
+    double Capacity
 );
 
 public record DriverProfileDto(
@@ -33,36 +42,60 @@ public record DriverProfileDto(
     string EmployeeCode,
     string FirstName,
     string LastName,
+    string FullName,
     string Phone,
     string? Email,
-    LicenseInfoDto License
+    string? IdCardNo,
+    DateTime? BirthDate,
+    LicenseInfoDto? License,
+    VehicleInfoDto? AssignedVehicle
+);
+
+public record MobileUserResponseDto(
+    long UserId,
+    string Username,
+    string Role,
+    bool IsActive,
+    DriverProfileDto? Driver,
+    DateTime CreatedAt
 );
 
 public record MobileMeResponseDto(
     long UserId,
+    string Username,
     string Role,
-    DriverProfileDto? Driver
+    bool IsActive,
+    DriverProfileDto? Driver,
+    DateTime CreatedAt
 );
 
-public record JobDto(
-    long Id,
-    string JobNumber,
-    string Title,
-    string? Description,
-    long? DriverId,
-    string? DriverName,
-    long? VehicleId,
-    string? VehiclePlate,
-    string Status,
-    string PickupLocation,
-    string? DropoffLocation,
-    DateTime? ScheduledStartAt,
-    DateTime? StartedAt,
-    DateTime? ArrivedAt,
-    DateTime? CompletedAt,
-    DateTime? CancelledAt,
-    string? CancellationReason
-);
+public class JobDto
+{
+    public long Id { get; set; }
+    public string JobNumber { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public long? DriverId { get; set; }
+    public string? DriverName { get; set; }
+    public long? VehicleId { get; set; }
+    public string? VehiclePlate { get; set; }
+    public string? VehicleType { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string PickupLocation { get; set; } = string.Empty;
+    public double? PickupLat { get; set; }
+    public double? PickupLng { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? Companions { get; set; }
+    public DateTime? ScheduledStartAt { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? ArrivedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public string? CancellationReason { get; set; }
+    public long? CancelledBy { get; set; }
+    public string? CancelledByName { get; set; }
+}
 
 public record CreateJobDto(
     string Title,
@@ -75,7 +108,6 @@ public record CreateJobDto(
     string? ContactName,
     string? ContactPhone,
     string? Companions,
-    string? DropoffLocation,
     DateTime? ScheduledStartAt
 );
 
@@ -92,7 +124,6 @@ public record UpdateJobDto(
     string? ContactName,
     string? ContactPhone,
     string? Companions,
-    string? DropoffLocation,
     DateTime? ScheduledStartAt
 );
 
@@ -169,3 +200,176 @@ public record UpdateVehicleTypeDto(
     string Name,
     string? Description
 );
+
+public record CreatedJobResponseDto(
+    long Id,
+    string JobNumber,
+    string Status
+);
+
+public record CreatedEntityResponseDto(
+    long Id,
+    string? Name
+);
+
+public record CreatedUserResponseDto(
+    long UserId,
+    string Username,
+    string Role
+);
+
+public class AdminJobListItemDto
+{
+    public long Id { get; set; }
+    public string JobNumber { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public long? DriverId { get; set; }
+    public string? DriverName { get; set; }
+    public long? VehicleId { get; set; }
+    public string? VehiclePlate { get; set; }
+    public string? VehicleType { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string PickupLocation { get; set; } = string.Empty;
+    public double? PickupLat { get; set; }
+    public double? PickupLng { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? Companions { get; set; }
+    public string? ScheduledDate { get; set; }
+    public string? ScheduledTime { get; set; }
+    public DateTime? ScheduledStartAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public string? CancellationReason { get; set; }
+    public long? CancelledBy { get; set; }
+    public string? CancelledByName { get; set; }
+}
+
+public class AdminUserListItemDto
+{
+    public long Id { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string Role { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? EmployeeId { get; set; }
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public string? IdCardNo { get; set; }
+    public string? BirthDate { get; set; }
+    public string? LicenseNo { get; set; }
+    public string? LicenseExpiration { get; set; }
+    public string? LicenseStatus { get; set; }
+    public long? VehicleId { get; set; }
+    public string? VehiclePlate { get; set; }
+    public string? VehicleType { get; set; }
+    public int ActiveJobsCount { get; set; }
+}
+
+public class AdminVehicleListItemDto
+{
+    public long Id { get; set; }
+    public string PlateNumber { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public double Capacity { get; set; }
+    public bool IsActive { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public string? VehicleType { get; set; }
+    public long? AssignedDriverId { get; set; }
+    public string? AssignedDriverName { get; set; }
+    public int ActiveJobsCount { get; set; }
+}
+
+public class VehicleTypeItemDto
+{
+    public long Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public int VehicleCount { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class ChartStatItemDto
+{
+    public string Time { get; set; } = string.Empty;
+    public int Completed { get; set; }
+    public int Inprogress { get; set; }
+    public int Cancelled { get; set; }
+}
+
+public record DashboardSummaryResponseDto(
+    int TotalJobsToday,
+    int TotalJobsThisMonth,
+    int TotalJobsThisYear,
+    int PendingJobs,
+    int InProgressJobs,
+    int CompletedJobs,
+    int CancelledJobs,
+    int AvailableDrivers,
+    IEnumerable<ChartStatItemDto> HourlyStats,
+    IEnumerable<ChartStatItemDto> MonthlyStats,
+    IEnumerable<ChartStatItemDto> YearlyStats
+);
+
+public class AuditLogListItemDto
+{
+    public long Id { get; set; }
+    public long? UserId { get; set; }
+    public string? Username { get; set; }
+    public string? FullName { get; set; }
+    public string Action { get; set; } = string.Empty;
+    public string Resource { get; set; } = string.Empty;
+    public string? ResourceId { get; set; }
+    public string? Details { get; set; }
+    public string? IpAddress { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class PaginatedListDto<T>
+{
+    public IEnumerable<T> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int TotalPages { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+}
+
+public class JobHistoryResponseDto
+{
+    public IEnumerable<JobDto> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+}
+
+public class JobHistoryRequestDto
+{
+    public int? Offset { get; set; } = 25;
+    public string? Status { get; set; }
+}
+
+public record ChangePasswordVerifyRequestDto(string Password);
+public record ChangePasswordVerifyResponseDto(string Token, int ExpiresIn);
+public record SetNewPasswordRequestDto(string Token, string Password, string ConfirmPassword);
+public record ForgotPasswordVerifyRequestDto(string Username, string IdCardNo);
+public record RegisterDeviceRequestDto(string DeviceId, string? DeviceName, string? DeviceModel, string? AppVersion, string? FcmToken, string? IpAddress);
+
+public class NotificationItemDto
+{
+    public long Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Body { get; set; } = string.Empty;
+    public string? PayloadJson { get; set; }
+    public bool IsRead { get; set; }
+    public DateTime? ReadAt { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class NotificationListResponseDto
+{
+    public IEnumerable<NotificationItemDto> Items { get; set; } = [];
+    public int UnreadCount { get; set; }
+    public int TotalCount { get; set; }
+}
+
+public record TestNotificationRequestDto(long? UserId, string? FcmToken, string Title, string Body, string? Type, long? JobId);
+
+
