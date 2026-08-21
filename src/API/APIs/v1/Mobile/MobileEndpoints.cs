@@ -1,6 +1,7 @@
 using Core.DTOs;
 using Core.Entities;
 using Core.Interfaces;
+using Dapper;
 using Infrastructure.Repositories;
 using Library.Common;
 using Microsoft.AspNetCore.Mvc;
