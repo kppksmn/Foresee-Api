@@ -245,9 +245,10 @@ public class PushNotificationService
                     SELECT user_id FROM user_profiles WHERE id = @targetUserId AND deleted_at IS NULL
                     LIMIT 1;", new { targetUserId }, cancellationToken: ct)) ?? targetUserId;
 
-            // 1. Get active FCM tokens for this user from user_devices table
-            const string getTokensSql = @"
-                SELECT DISTINCT ud.fcm_token 
+            // 1. Get active devices and FCM tokens for this user from user_devices table
+            const string getDevicesSql = @"
+                SELECT ud.device_id AS DeviceId, ud.device_name AS DeviceName, 
+                       ud.device_model AS DeviceModel, ud.app_version AS AppVersion, ud.fcm_token AS FcmToken
                 FROM user_devices ud 
                 WHERE ud.user_id = @resolvedUserId 
                   AND ud.is_active = TRUE 
@@ -255,15 +256,27 @@ public class PushNotificationService
                   AND ud.fcm_token IS NOT NULL 
                   AND TRIM(ud.fcm_token) != '';";
 
-            var tokens = (await conn.QueryAsync<string>(new CommandDefinition(getTokensSql, new { resolvedUserId }, cancellationToken: ct))).ToList();
+            var devices = (await conn.QueryAsync<UserDevice>(new CommandDefinition(getDevicesSql, new { resolvedUserId }, cancellationToken: ct))).ToList();
+
+            Console.WriteLine();
+            Console.WriteLine("================================================================================");
+            Console.WriteLine($"🔔 [NOTIFICATION DISPATCH] => Target User ID: {targetUserId} (Resolved ID: {resolvedUserId})");
+            Console.WriteLine($"   📌 Title   : {title}");
+            Console.WriteLine($"   📄 Body    : {body}");
+            Console.WriteLine($"   📦 Payload : {payloadJson}");
+            Console.WriteLine($"   📱 Active Devices: {devices.Count}");
 
             bool hasSent = false;
 
-            if (tokens.Count > 0)
+            if (devices.Count > 0)
             {
-                foreach (var token in tokens)
+                foreach (var dev in devices)
                 {
-                    var success = await SendFcmPushAsync(token, title, body, payloadData ?? new { }, ct);
+                    Console.WriteLine($"   -----------------------------------------------------------------------------");
+                    Console.WriteLine($"   📲 Device: {dev.DeviceName} ({dev.DeviceModel}) | AppVer: {dev.AppVersion} | ID: {dev.DeviceId}");
+                    Console.WriteLine($"   🔑 FCM Token: {dev.FcmToken}");
+                    
+                    var success = await SendFcmPushAsync(dev.FcmToken!, title, body, payloadData ?? new { }, ct);
                     if (success)
                     {
                         hasSent = true;
@@ -272,10 +285,13 @@ public class PushNotificationService
             }
             else
             {
+                Console.WriteLine("   ⚠️ No active FCM devices found for this user in user_devices. Notification stored for in-app viewing only.");
                 _logger.LogInformation("No active FCM tokens found in user_devices for user ID {UserId} (Resolved ID: {ResolvedUserId})", targetUserId, resolvedUserId);
                 // Mark processed so outbox stores the notification history for in-app viewing
                 hasSent = true;
             }
+            Console.WriteLine("================================================================================");
+            Console.WriteLine();
 
             // 2. Insert record into notification_outbox table
             const string outboxSql = @"
@@ -290,12 +306,13 @@ public class PushNotificationService
                 payloadJson,
                 isProcessed = hasSent,
                 processedAt = hasSent ? DateTime.UtcNow : (DateTime?)null
-            }, cancellationToken: ct));
+            }, cancellationToken: CancellationToken.None));
 
             return hasSent;
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"❌ [NOTIFICATION ERROR] Failed to send or record notification for user #{targetUserId}: {ex.Message}");
             _logger.LogError(ex, "Failed to send or record notification for user #{TargetUserId}", targetUserId);
             return false;
         }
@@ -378,7 +395,9 @@ public class PushNotificationService
                     }
                 };
 
+                Console.WriteLine($"   🚀 Sending via Firebase Admin SDK (HTTP v1)...");
                 var response = await FirebaseMessaging.DefaultInstance.SendAsync(message, ct);
+                Console.WriteLine($"   ✅ [FCM SUCCESS] Message ID: {response}");
                 _logger.LogInformation("Firebase FCM HTTP v1 push sent successfully to token {Token}... Message ID: {MessageId}", 
                     fcmToken.Substring(0, Math.Min(10, fcmToken.Length)), response);
                 return true;
@@ -388,6 +407,7 @@ public class PushNotificationService
             var serverKey = _config["Firebase:ServerKey"];
             if (!string.IsNullOrWhiteSpace(serverKey))
             {
+                Console.WriteLine($"   🚀 Sending via Firebase Legacy HTTP API (ServerKey)...");
                 using var request = new HttpRequestMessage(HttpMethod.Post, "https://fcm.googleapis.com/fcm/send");
                 request.Headers.TryAddWithoutValidation("Authorization", $"key={serverKey}");
 
@@ -414,17 +434,20 @@ public class PushNotificationService
                 var res = await _httpClient.SendAsync(request, ct);
                 if (res.IsSuccessStatusCode)
                 {
+                    Console.WriteLine($"   ✅ [FCM SUCCESS] Legacy Push Sent Successfully");
                     _logger.LogInformation("Firebase Legacy Push Notification sent successfully to token {Token}", fcmToken.Substring(0, Math.Min(10, fcmToken.Length)) + "...");
                     return true;
                 }
                 else
                 {
                     var err = await res.Content.ReadAsStringAsync(ct);
+                    Console.WriteLine($"   ❌ [FCM FAILED] Status: {res.StatusCode}, Error: {err}");
                     _logger.LogWarning("Firebase push send failed: {StatusCode} - {Error}", res.StatusCode, err);
                 }
             }
             else
             {
+                Console.WriteLine($"   ℹ️ [MOCK PUSH] No valid Firebase credentials. Simulating push dispatch: Title='{title}', Body='{body}'");
                 _logger.LogInformation("[Firebase Push Mock] Notification dispatched to token {Token}: Title='{Title}', Body='{Body}', Data={Data}", 
                     fcmToken.Substring(0, Math.Min(10, fcmToken.Length)) + "...", title, body, JsonSerializer.Serialize(data));
                 return true;
@@ -432,6 +455,7 @@ public class PushNotificationService
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"   ❌ [FCM EXCEPTION] Error: {ex.Message}");
             _logger.LogError(ex, "Failed to send FCM push notification to token {Token}", fcmToken);
         }
 
