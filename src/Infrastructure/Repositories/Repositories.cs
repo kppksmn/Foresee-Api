@@ -473,3 +473,212 @@ public class AuditLogRepository
         }
     }
 }
+
+public class MenuManagementRepository
+{
+    private readonly DbConnectionFactory _db;
+    public MenuManagementRepository(DbConnectionFactory db) => _db = db;
+
+    public async Task<List<MenuManagementMenuResponse>> GetMenusAsync(CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            SELECT id, name_th AS NameTh, name_en AS NameEn, endpoint, menu_type AS MenuType, 
+                   external_url AS ExternalUrl, target_path AS TargetPath, open_mode AS OpenMode, 
+                   authentication_mode AS AuthenticationMode, parent_id AS ParentId, seq, 
+                   is_public AS IsPublic, is_marketing AS IsMarketing, is_read AS IsRead, 
+                   is_create AS IsCreate, is_update AS IsUpdate, is_delete AS IsDelete, 
+                   is_import AS IsImport, is_export AS IsExport, created_by AS CreatedBy, 
+                   created_at AS CreatedAt, updated_by AS UpdatedBy, updated_at AS UpdatedAt
+            FROM public.menus
+            WHERE deleted_at IS NULL
+            ORDER BY seq ASC, id ASC;";
+        var list = await conn.QueryAsync<Menu>(new CommandDefinition(sql, cancellationToken: ct));
+        return list.Select(MenuManagementMenuResponse.From).ToList();
+    }
+
+    public async Task<List<MenuManagementMenuTreeResponse>> GetMenuTreeAsync(CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            SELECT id, name_th AS NameTh, name_en AS NameEn, endpoint, menu_type AS MenuType, 
+                   external_url AS ExternalUrl, target_path AS TargetPath, open_mode AS OpenMode, 
+                   authentication_mode AS AuthenticationMode, parent_id AS ParentId, seq, 
+                   is_public AS IsPublic, is_marketing AS IsMarketing, is_read AS IsRead, 
+                   is_create AS IsCreate, is_update AS IsUpdate, is_delete AS IsDelete, 
+                   is_import AS IsImport, is_export AS IsExport, created_by AS CreatedBy, 
+                   created_at AS CreatedAt, updated_by AS UpdatedBy, updated_at AS UpdatedAt
+            FROM public.menus
+            WHERE deleted_at IS NULL
+            ORDER BY seq ASC, id ASC;";
+        var list = (await conn.QueryAsync<Menu>(new CommandDefinition(sql, cancellationToken: ct))).ToList();
+        return BuildMenuTree(list);
+    }
+
+    public async Task<Menu?> GetMenuByIdAsync(int id, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            SELECT id, name_th AS NameTh, name_en AS NameEn, endpoint, menu_type AS MenuType, 
+                   external_url AS ExternalUrl, target_path AS TargetPath, open_mode AS OpenMode, 
+                   authentication_mode AS AuthenticationMode, parent_id AS ParentId, seq, 
+                   is_public AS IsPublic, is_marketing AS IsMarketing, is_read AS IsRead, 
+                   is_create AS IsCreate, is_update AS IsUpdate, is_delete AS IsDelete, 
+                   is_import AS IsImport, is_export AS IsExport, created_by AS CreatedBy, 
+                   created_at AS CreatedAt, updated_by AS UpdatedBy, updated_at AS UpdatedAt
+            FROM public.menus
+            WHERE deleted_at IS NULL AND id = @id;";
+        return await conn.QueryFirstOrDefaultAsync<Menu>(new CommandDefinition(sql, new { id }, cancellationToken: ct));
+    }
+
+    public async Task<bool> ExistsEndpointAsync(string endpoint, int? exceptId = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint)) return false;
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            SELECT COUNT(1)
+            FROM public.menus
+            WHERE deleted_at IS NULL AND endpoint = @endpoint AND (@exceptId IS NULL OR id <> @exceptId);";
+        return await conn.ExecuteScalarAsync<int>(new CommandDefinition(sql, new { endpoint = endpoint.Trim(), exceptId }, cancellationToken: ct)) > 0;
+    }
+
+    public async Task<int> CreateMenuAsync(MenuManagementUpsertMenuRequest req, string createdBy, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            INSERT INTO public.menus
+            (
+                name_th, name_en, endpoint, menu_type, external_url, target_path,
+                open_mode, authentication_mode, parent_id, seq, is_public, is_marketing,
+                is_read, is_create, is_update, is_delete, is_import, is_export,
+                created_by, created_at, updated_by, updated_at
+            )
+            VALUES
+            (
+                @NameTh, @NameEn, @Endpoint, @MenuType, @ExternalUrl, @TargetPath,
+                @OpenMode, @AuthenticationMode, @ParentId, @Seq, @IsPublic, @IsMarketing,
+                @IsRead, @IsCreate, @IsUpdate, @IsDelete, @IsImport, @IsExport,
+                @createdBy, CURRENT_TIMESTAMP, @createdBy, CURRENT_TIMESTAMP
+            )
+            RETURNING id;";
+        return await conn.ExecuteScalarAsync<int>(new CommandDefinition(sql, new
+        {
+            req.NameTh,
+            req.NameEn,
+            Endpoint = string.IsNullOrWhiteSpace(req.Endpoint) ? null : req.Endpoint.Trim(),
+            MenuType = (int)req.MenuType,
+            ExternalUrl = string.IsNullOrWhiteSpace(req.ExternalUrl) ? null : req.ExternalUrl.Trim(),
+            TargetPath = string.IsNullOrWhiteSpace(req.TargetPath) ? null : req.TargetPath.Trim(),
+            OpenMode = (int)req.OpenMode,
+            AuthenticationMode = (int)req.AuthenticationMode,
+            req.ParentId,
+            req.Seq,
+            req.IsPublic,
+            req.IsMarketing,
+            req.IsRead,
+            req.IsCreate,
+            req.IsUpdate,
+            req.IsDelete,
+            req.IsImport,
+            req.IsExport,
+            createdBy
+        }, cancellationToken: ct));
+    }
+
+    public async Task<int> UpdateMenuAsync(int id, MenuManagementUpsertMenuRequest req, string updatedBy, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            UPDATE public.menus SET
+                name_th = @NameTh,
+                name_en = @NameEn,
+                endpoint = @Endpoint,
+                menu_type = @MenuType,
+                external_url = @ExternalUrl,
+                target_path = @TargetPath,
+                open_mode = @OpenMode,
+                authentication_mode = @AuthenticationMode,
+                parent_id = @ParentId,
+                seq = @Seq,
+                is_public = @IsPublic,
+                is_marketing = @IsMarketing,
+                is_read = @IsRead,
+                is_create = @IsCreate,
+                is_update = @IsUpdate,
+                is_delete = @IsDelete,
+                is_import = @IsImport,
+                is_export = @IsExport,
+                updated_by = @updatedBy,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE deleted_at IS NULL AND id = @id;";
+        return await conn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            id,
+            req.NameTh,
+            req.NameEn,
+            Endpoint = string.IsNullOrWhiteSpace(req.Endpoint) ? null : req.Endpoint.Trim(),
+            MenuType = (int)req.MenuType,
+            ExternalUrl = string.IsNullOrWhiteSpace(req.ExternalUrl) ? null : req.ExternalUrl.Trim(),
+            TargetPath = string.IsNullOrWhiteSpace(req.TargetPath) ? null : req.TargetPath.Trim(),
+            OpenMode = (int)req.OpenMode,
+            AuthenticationMode = (int)req.AuthenticationMode,
+            req.ParentId,
+            req.Seq,
+            req.IsPublic,
+            req.IsMarketing,
+            req.IsRead,
+            req.IsCreate,
+            req.IsUpdate,
+            req.IsDelete,
+            req.IsImport,
+            req.IsExport,
+            updatedBy
+        }, cancellationToken: ct));
+    }
+
+    public async Task<int> DeleteMenuAsync(int id, string deletedBy, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            WITH RECURSIVE menu_tree AS (
+                SELECT id FROM public.menus WHERE id = @id AND deleted_at IS NULL
+                UNION ALL
+                SELECT m.id FROM public.menus m
+                JOIN menu_tree mt ON m.parent_id = mt.id
+                WHERE m.deleted_at IS NULL
+            )
+            UPDATE public.menus
+            SET deleted_by = @deletedBy, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id IN (SELECT id FROM menu_tree);";
+        return await conn.ExecuteAsync(new CommandDefinition(sql, new { id, deletedBy }, cancellationToken: ct));
+    }
+
+    private static List<MenuManagementMenuTreeResponse> BuildMenuTree(List<Menu> menus)
+    {
+        var lookup = menus.ToDictionary(m => m.Id);
+        var childrenByParent = new Dictionary<int, List<Menu>>();
+
+        foreach (var m in menus)
+        {
+            var pId = m.ParentId ?? 0;
+            if (!childrenByParent.ContainsKey(pId))
+            {
+                childrenByParent[pId] = [];
+            }
+            childrenByParent[pId].Add(m);
+        }
+
+        List<MenuManagementMenuTreeResponse> GetChildren(int parentId)
+        {
+            if (!childrenByParent.TryGetValue(parentId, out var children)) return [];
+            return children
+                .OrderBy(c => c.Seq)
+                .ThenBy(c => c.Id)
+                .Select(c => MenuManagementMenuTreeResponse.From(c, GetChildren(c.Id)))
+                .ToList();
+        }
+
+        return GetChildren(0);
+    }
+}
+

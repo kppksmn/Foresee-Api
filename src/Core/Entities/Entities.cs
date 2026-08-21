@@ -143,4 +143,53 @@ public class NotificationOutbox
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
+public enum MenuType
+{
+    Internal = 1,
+    External = 2
+}
+
+public enum MenuOpenMode
+{
+    IFrame = 1,
+    NewTab = 2
+}
+
+public enum MenuAuthenticationMode
+{
+    None = 1,
+    Oidc = 2,
+    TokenHandoff = 3
+}
+
+public class Menu
+{
+    public int Id { get; set; }
+    public string NameTh { get; set; } = string.Empty;
+    public string NameEn { get; set; } = string.Empty;
+    public string? Endpoint { get; set; }
+    public MenuType MenuType { get; set; } = MenuType.Internal;
+    public string? ExternalUrl { get; set; }
+    public string? TargetPath { get; set; }
+    public MenuOpenMode OpenMode { get; set; } = MenuOpenMode.IFrame;
+    public MenuAuthenticationMode AuthenticationMode { get; set; } = MenuAuthenticationMode.None;
+    public int? ParentId { get; set; }
+    public int Seq { get; set; }
+    public bool IsPublic { get; set; }
+    public bool IsMarketing { get; set; }
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public string? UpdatedBy { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+    public string? DeletedBy { get; set; }
+    public DateTime? DeletedAt { get; set; }
+}
+
+
 

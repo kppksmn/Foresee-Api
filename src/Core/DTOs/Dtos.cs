@@ -1,3 +1,5 @@
+using Core.Entities;
+
 namespace Core.DTOs;
 
 public class LoginRequestDto
@@ -407,5 +409,122 @@ public class NotificationListResponseDto
 }
 
 public record TestNotificationRequestDto(long? UserId, string? FcmToken, string Title, string Body, string? Type, long? JobId);
+
+public class MenuManagementUpsertMenuRequest
+{
+    public string NameTh { get; set; } = string.Empty;
+    public string NameEn { get; set; } = string.Empty;
+    public string? Endpoint { get; set; }
+    public MenuType MenuType { get; set; } = MenuType.Internal;
+    public string? ExternalUrl { get; set; }
+    public string? TargetPath { get; set; }
+    public MenuOpenMode OpenMode { get; set; } = MenuOpenMode.IFrame;
+    public MenuAuthenticationMode AuthenticationMode { get; set; } = MenuAuthenticationMode.None;
+    public int? ParentId { get; set; }
+    public int Seq { get; set; }
+    public bool IsPublic { get; set; }
+    public bool IsMarketing { get; set; }
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+}
+
+public class MenuManagementMenuResponse
+{
+    public int Id { get; set; }
+    public string NameTh { get; set; } = string.Empty;
+    public string NameEn { get; set; } = string.Empty;
+    public string? Endpoint { get; set; }
+    public MenuType MenuType { get; set; } = MenuType.Internal;
+    public string? ExternalUrl { get; set; }
+    public string? TargetPath { get; set; }
+    public MenuOpenMode OpenMode { get; set; } = MenuOpenMode.IFrame;
+    public MenuAuthenticationMode AuthenticationMode { get; set; } = MenuAuthenticationMode.None;
+    public int? ParentId { get; set; }
+    public int Seq { get; set; }
+    public bool IsPublic { get; set; }
+    public bool IsMarketing { get; set; }
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+
+    public static MenuManagementMenuResponse From(Menu menu) => new()
+    {
+        Id = menu.Id,
+        NameTh = menu.NameTh,
+        NameEn = menu.NameEn,
+        Endpoint = menu.Endpoint,
+        MenuType = menu.MenuType,
+        ExternalUrl = menu.ExternalUrl,
+        TargetPath = menu.TargetPath,
+        OpenMode = menu.OpenMode,
+        AuthenticationMode = menu.AuthenticationMode,
+        ParentId = menu.ParentId,
+        Seq = menu.Seq,
+        IsPublic = menu.IsPublic,
+        IsMarketing = menu.IsMarketing,
+        IsRead = menu.IsRead,
+        IsCreate = menu.IsCreate,
+        IsUpdate = menu.IsUpdate,
+        IsDelete = menu.IsDelete,
+        IsImport = menu.IsImport,
+        IsExport = menu.IsExport,
+    };
+}
+
+public class MenuManagementMenuTreeResponse
+{
+    public int Id { get; set; }
+    public string NameTh { get; set; } = string.Empty;
+    public string NameEn { get; set; } = string.Empty;
+    public string? Endpoint { get; set; }
+    public MenuType MenuType { get; set; } = MenuType.Internal;
+    public string? ExternalUrl { get; set; }
+    public string? TargetPath { get; set; }
+    public MenuOpenMode OpenMode { get; set; } = MenuOpenMode.IFrame;
+    public MenuAuthenticationMode AuthenticationMode { get; set; } = MenuAuthenticationMode.None;
+    public int? ParentId { get; set; }
+    public int Seq { get; set; }
+    public bool IsPublic { get; set; }
+    public bool IsMarketing { get; set; }
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+    public List<MenuManagementMenuTreeResponse> Children { get; set; } = [];
+
+    public static MenuManagementMenuTreeResponse From(Menu menu, List<MenuManagementMenuTreeResponse> children) => new()
+    {
+        Id = menu.Id,
+        NameTh = menu.NameTh,
+        NameEn = menu.NameEn,
+        Endpoint = menu.Endpoint,
+        MenuType = menu.MenuType,
+        ExternalUrl = menu.ExternalUrl,
+        TargetPath = menu.TargetPath,
+        OpenMode = menu.OpenMode,
+        AuthenticationMode = menu.AuthenticationMode,
+        ParentId = menu.ParentId,
+        Seq = menu.Seq,
+        IsPublic = menu.IsPublic,
+        IsMarketing = menu.IsMarketing,
+        IsRead = menu.IsRead,
+        IsCreate = menu.IsCreate,
+        IsUpdate = menu.IsUpdate,
+        IsDelete = menu.IsDelete,
+        IsImport = menu.IsImport,
+        IsExport = menu.IsExport,
+        Children = children,
+    };
+}
+
 
 

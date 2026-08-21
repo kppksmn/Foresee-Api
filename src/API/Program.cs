@@ -25,6 +25,7 @@ builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<UserProfileRepository>();
 builder.Services.AddScoped<JobRepository>();
 builder.Services.AddScoped<AuditLogRepository>();
+builder.Services.AddScoped<MenuManagementRepository>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<PushNotificationService>();
 builder.Services.AddScoped<ICurrentUser, CurrentUser>();

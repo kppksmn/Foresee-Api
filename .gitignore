@@ -21,6 +21,8 @@
 appsettings.Development.json
 appsettings.Local.json
 *.env
+firebase-admin.json
+*firebase-admin*.json
 
 ## OS Generated Files
 .DS_Store
