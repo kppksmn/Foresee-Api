@@ -21,6 +21,7 @@ public record AuthResponseDto(
     int ExpiresIn,
     long UserId,
     string Username,
+    string? Role = null,
     string TokenType = "Bearer"
 );
 

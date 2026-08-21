@@ -39,7 +39,7 @@ public static class AdminEndpoints
     {
         var adminGroup = routes.MapGroup("/api/v1/admin").RequireAuthorization("AdminOnly").WithTags("Web Admin");
         var mobileAdminGroup = routes.MapGroup("/api/v1/mobile/admin").RequireAuthorization("MobileAdmin").WithTags("Mobile Admin");
-        var menuManagementGroup = routes.MapGroup("/api/v1/menu-managements").RequireAuthorization("AdminOnly").WithTags("Menu Management");
+        var menuManagementGroup = routes.MapGroup("/api/v1/menu-managements").RequireAuthorization("MenuAdminOnly").WithTags("Menu Management");
 
         RegisterAdminRoutes(adminGroup);
         RegisterAdminRoutes(mobileAdminGroup);
@@ -1996,7 +1996,7 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .WithSummary("ทดสอบส่งการแจ้งเตือน Push Notification (Test Notification)");
 
-        var menusSubGroup = group.MapGroup("/menus");
+        var menusSubGroup = group.MapGroup("/menus").RequireAuthorization("MenuAdminOnly");
         RegisterMenuManagementRoutes(menusSubGroup);
     }
 

@@ -109,7 +109,8 @@ public class AuthService
             RefreshToken: refreshToken,
             ExpiresIn: int.Parse(_config["Jwt:AccessTokenExpirationMinutes"] ?? "30") * 60,
             UserId: user.Id,
-            Username: user.Username
+            Username: user.Username,
+            Role: user.Role
         );
 
         return (dto, null, "เข้าสู่ระบบสำเร็จ");
@@ -191,7 +192,8 @@ public class AuthService
             RefreshToken: newRefreshToken,
             ExpiresIn: int.Parse(_config["Jwt:AccessTokenExpirationMinutes"] ?? "30") * 60,
             UserId: user.Id,
-            Username: user.Username
+            Username: user.Username,
+            Role: user.Role
         );
 
         return (dto, null, "Refresh token สำเร็จ");

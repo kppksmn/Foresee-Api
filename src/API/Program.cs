@@ -96,6 +96,7 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("MobileDriver", policy => policy.RequireAuthenticatedUser());
     options.AddPolicy("MobileAdmin", policy => policy.RequireAuthenticatedUser());
     options.AddPolicy("AdminOnly", policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy("MenuAdminOnly", policy => policy.RequireAuthenticatedUser().RequireRole("Admin"));
 });
 
 builder.Services.AddHealthChecks();
