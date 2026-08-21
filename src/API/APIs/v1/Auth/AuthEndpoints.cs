@@ -134,5 +134,19 @@ public static class AuthEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status200OK)
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .WithSummary("ตั้งรหัสผ่านใหม่ด้วย Verification Token (Alias: /new-password)");
+
+        group.MapGet("/me/menus", async (
+            ICurrentUser currentUser,
+            MenuManagementRepository menuRepo,
+            CancellationToken ct) =>
+        {
+            if (currentUser.UserId <= 0) return Results.Unauthorized();
+            var menus = await menuRepo.GetNavigableMenusForUserAsync(currentUser.UserId, currentUser.Role, ct);
+            return Results.Ok(ApiResponse<List<UserNavMenuDto>>.Ok(menus, "ดึงโครงสร้างเมนูสำหรับผู้ใช้สำเร็จ"));
+        })
+        .RequireAuthorization()
+        .Produces<ApiResponse<List<UserNavMenuDto>>>(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status401Unauthorized)
+        .WithSummary("ดึงโครงสร้างเมนูที่ผู้ใช้ได้รับสิทธิ์ (Get Navigable Menus for Current User)");
     }
 }

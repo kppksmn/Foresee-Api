@@ -191,5 +191,17 @@ public class Menu
     public DateTime? DeletedAt { get; set; }
 }
 
-
-
+public class UserMenuPermission
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public long MenuId { get; set; }
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAt { get; set; }
+}

@@ -229,6 +229,49 @@ public static class DbInitializer
                 deleted_at TIMESTAMPTZ NULL
             );
 
+            CREATE TABLE IF NOT EXISTS menus (
+                id BIGSERIAL PRIMARY KEY,
+                name_th VARCHAR(255) NOT NULL,
+                name_en VARCHAR(255) NOT NULL,
+                endpoint VARCHAR(255) NULL,
+                menu_type INT NOT NULL DEFAULT 1,
+                external_url TEXT NULL,
+                target_path VARCHAR(255) NULL,
+                open_mode INT NOT NULL DEFAULT 1,
+                authentication_mode INT NOT NULL DEFAULT 1,
+                parent_id BIGINT NULL REFERENCES menus(id) ON DELETE CASCADE,
+                seq INT NOT NULL DEFAULT 1,
+                is_public BOOLEAN NOT NULL DEFAULT FALSE,
+                is_marketing BOOLEAN NOT NULL DEFAULT FALSE,
+                is_read BOOLEAN NOT NULL DEFAULT FALSE,
+                is_create BOOLEAN NOT NULL DEFAULT FALSE,
+                is_update BOOLEAN NOT NULL DEFAULT FALSE,
+                is_delete BOOLEAN NOT NULL DEFAULT FALSE,
+                is_import BOOLEAN NOT NULL DEFAULT FALSE,
+                is_export BOOLEAN NOT NULL DEFAULT FALSE,
+                created_by BIGINT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_by BIGINT NULL,
+                updated_at TIMESTAMPTZ NULL,
+                deleted_by BIGINT NULL,
+                deleted_at TIMESTAMPTZ NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS user_menu_permissions (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                menu_id BIGINT NOT NULL REFERENCES menus(id) ON DELETE CASCADE,
+                is_read BOOLEAN NOT NULL DEFAULT FALSE,
+                is_create BOOLEAN NOT NULL DEFAULT FALSE,
+                is_update BOOLEAN NOT NULL DEFAULT FALSE,
+                is_delete BOOLEAN NOT NULL DEFAULT FALSE,
+                is_import BOOLEAN NOT NULL DEFAULT FALSE,
+                is_export BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NULL,
+                CONSTRAINT uq_user_menu UNIQUE (user_id, menu_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
             CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
             CREATE INDEX IF NOT EXISTS idx_user_profiles_employee_code ON user_profiles(employee_code);
@@ -236,6 +279,7 @@ public static class DbInitializer
             CREATE INDEX IF NOT EXISTS idx_user_devices_user_id ON user_devices(user_id);
             CREATE INDEX IF NOT EXISTS idx_user_devices_device_id ON user_devices(device_id);
             CREATE INDEX IF NOT EXISTS idx_user_devices_fcm_token ON user_devices(fcm_token);
+            CREATE INDEX IF NOT EXISTS idx_user_menu_permissions_user_id ON user_menu_permissions(user_id);
             CREATE INDEX IF NOT EXISTS idx_jobs_driver_id ON jobs(driver_id);
             CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
             CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at);

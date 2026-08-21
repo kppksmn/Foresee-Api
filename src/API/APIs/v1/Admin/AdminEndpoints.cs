@@ -1658,6 +1658,55 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("รีเซ็ตรหัสผ่านผู้ใช้งานเป็นวันเดือนปีเกิด (Reset User Password)");
 
+        group.MapGet("/users/{userId:long}/menu-permissions", async (
+            long userId, 
+            MenuManagementRepository menuRepo, 
+            DbConnectionFactory db,
+            CancellationToken ct) =>
+        {
+            using var conn = db.CreateConnection();
+            var userExists = await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(1) FROM users WHERE id = @userId AND deleted_at IS NULL;", new { userId });
+            if (userExists == 0) return Results.NotFound(ApiResponse<string>.Fail("ไม่พบผู้ใช้งานนี้"));
+
+            var tree = await menuRepo.GetUserMenuPermissionsTreeAsync(userId, ct);
+            return Results.Ok(ApiResponse<List<UserMenuPermissionNodeDto>>.Ok(tree));
+        })
+        .Produces<ApiResponse<List<UserMenuPermissionNodeDto>>>(StatusCodes.Status200OK)
+        .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
+        .WithSummary("ดึงสิทธิ์เมนูของผู้ใช้งานรายบุคคล (Get User Menu Permissions)");
+
+        group.MapPut("/users/{userId:long}/menu-permissions", async (
+            long userId, 
+            [FromBody] UpdateUserMenuPermissionsRequest req, 
+            ICurrentUser currentUser, 
+            MenuManagementRepository menuRepo, 
+            AuditLogRepository auditRepo, 
+            DbConnectionFactory db,
+            CancellationToken ct) =>
+        {
+            using var conn = db.CreateConnection();
+            var targetUserSql = @"
+                SELECT u.username,
+                       COALESCE(NULLIF(TRIM(p.first_name || ' ' || p.last_name), ''), u.username) AS name
+                FROM users u
+                LEFT JOIN user_profiles p ON p.user_id = u.id
+                WHERE u.id = @userId AND u.deleted_at IS NULL;";
+            var targetUser = await conn.QueryFirstOrDefaultAsync(new CommandDefinition(targetUserSql, new { userId }, cancellationToken: ct));
+            if (targetUser == null) return Results.NotFound(ApiResponse<string>.Fail("ไม่พบผู้ใช้งานนี้"));
+
+            await menuRepo.UpdateUserMenuPermissionsAsync(userId, req.Permissions, ct);
+
+            var userDisplayName = (string)targetUser.name;
+            var username = (string)targetUser.username;
+            await auditRepo.LogAsync(currentUser.UserId, "UPDATE", "user_menu_permissions", userId.ToString(), $"ปรับปรุงสิทธิ์การใช้งานเมนูของผู้ใช้: {userDisplayName} (Username: {username}) [รวม {req.Permissions.Count} เมนู]", ct: ct);
+
+            return Results.Ok(ApiResponse<string>.Ok("บันทึกสิทธิ์การใช้งานเมนูเรียบร้อยแล้ว"));
+        })
+        .Produces<ApiResponse<string>>(StatusCodes.Status200OK)
+        .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
+        .WithSummary("บันทึกสิทธิ์เมนูของผู้ใช้งานรายบุคคล (Update User Menu Permissions)");
+
         // Vehicles Endpoints
         group.MapGet("/vehicles", async ([FromQuery] string? search, DbConnectionFactory db, CancellationToken ct) =>
         {

@@ -680,5 +680,255 @@ public class MenuManagementRepository
 
         return GetChildren(0);
     }
+
+    public async Task<List<UserMenuPermissionNodeDto>> GetUserMenuPermissionsTreeAsync(long userId, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        const string sql = @"
+            SELECT 
+                m.id AS menuid,
+                m.parent_id AS parentid,
+                m.name_th AS nameth,
+                m.name_en AS nameen,
+                m.endpoint,
+                m.seq,
+                m.is_public AS ispublic,
+                m.is_marketing AS ismarketing,
+                m.is_read AS canread,
+                m.is_create AS cancreate,
+                m.is_update AS canupdate,
+                m.is_delete AS candelete,
+                m.is_import AS canimport,
+                m.is_export AS canexport,
+                COALESCE(ump.is_read, FALSE) AS isread,
+                COALESCE(ump.is_create, FALSE) AS iscreate,
+                COALESCE(ump.is_update, FALSE) AS isupdate,
+                COALESCE(ump.is_delete, FALSE) AS isdelete,
+                COALESCE(ump.is_import, FALSE) AS isimport,
+                COALESCE(ump.is_export, FALSE) AS isexport
+            FROM menus m
+            LEFT JOIN user_menu_permissions ump ON ump.menu_id = m.id AND ump.user_id = @userId
+            WHERE m.deleted_at IS NULL
+            ORDER BY m.seq ASC, m.id ASC;";
+
+        var rows = (await conn.QueryAsync(new CommandDefinition(sql, new { userId }, cancellationToken: ct))).ToList();
+
+        var nodes = rows.Select(r => new UserMenuPermissionNodeDto
+        {
+            MenuId = (long)r.menuid,
+            ParentId = r.parentid != null ? (long)r.parentid : null,
+            NameTh = (string)r.nameth,
+            NameEn = (string)r.nameen,
+            Endpoint = (string?)r.endpoint,
+            Seq = (int)r.seq,
+            IsPublic = (bool)r.ispublic,
+            IsMarketing = (bool)r.ismarketing,
+            CanRead = (bool)r.canread,
+            CanCreate = (bool)r.cancreate,
+            CanUpdate = (bool)r.canupdate,
+            CanDelete = (bool)r.candelete,
+            CanImport = (bool)r.canimport,
+            CanExport = (bool)r.canexport,
+            IsRead = (bool)r.isread,
+            IsCreate = (bool)r.iscreate,
+            IsUpdate = (bool)r.isupdate,
+            IsDelete = (bool)r.isdelete,
+            IsImport = (bool)r.isimport,
+            IsExport = (bool)r.isexport,
+            Children = []
+        }).ToList();
+
+        var childrenByParent = nodes
+            .GroupBy(n => n.ParentId ?? 0)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        List<UserMenuPermissionNodeDto> BuildTree(long parentId)
+        {
+            if (!childrenByParent.TryGetValue(parentId, out var children)) return [];
+            foreach (var child in children)
+            {
+                child.Children = BuildTree(child.MenuId);
+            }
+            return children.OrderBy(c => c.Seq).ThenBy(c => c.MenuId).ToList();
+        }
+
+        return BuildTree(0);
+    }
+
+    public async Task UpdateUserMenuPermissionsAsync(long userId, List<UserMenuPermissionItemRequest> permissions, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        if (conn is System.Data.Common.DbConnection dbConn && dbConn.State != System.Data.ConnectionState.Open)
+        {
+            await dbConn.OpenAsync(ct);
+        }
+
+        using var transaction = conn.BeginTransaction();
+        try
+        {
+            await conn.ExecuteAsync(new CommandDefinition(@"
+                DELETE FROM user_menu_permissions WHERE user_id = @userId;",
+                new { userId }, transaction: transaction, cancellationToken: ct));
+
+            const string insertSql = @"
+                INSERT INTO user_menu_permissions 
+                    (user_id, menu_id, is_read, is_create, is_update, is_delete, is_import, is_export, created_at)
+                VALUES 
+                    (@UserId, @MenuId, @IsRead, @IsCreate, @IsUpdate, @IsDelete, @IsImport, @IsExport, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, menu_id) DO UPDATE SET
+                    is_read = EXCLUDED.is_read,
+                    is_create = EXCLUDED.is_create,
+                    is_update = EXCLUDED.is_update,
+                    is_delete = EXCLUDED.is_delete,
+                    is_import = EXCLUDED.is_import,
+                    is_export = EXCLUDED.is_export,
+                    updated_at = CURRENT_TIMESTAMP;";
+
+            foreach (var perm in permissions)
+            {
+                // Only insert if at least one permission is true
+                if (perm.IsRead || perm.IsCreate || perm.IsUpdate || perm.IsDelete || perm.IsImport || perm.IsExport)
+                {
+                    await conn.ExecuteAsync(new CommandDefinition(insertSql, new
+                    {
+                        UserId = userId,
+                        perm.MenuId,
+                        perm.IsRead,
+                        perm.IsCreate,
+                        perm.IsUpdate,
+                        perm.IsDelete,
+                        perm.IsImport,
+                        perm.IsExport
+                    }, transaction: transaction, cancellationToken: ct));
+                }
+            }
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<List<UserNavMenuDto>> GetNavigableMenusForUserAsync(long userId, string role, CancellationToken ct = default)
+    {
+        using var conn = _db.CreateConnection();
+        bool isAdmin = string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+
+        const string sql = @"
+            SELECT 
+                m.id,
+                m.parent_id AS parentid,
+                m.name_th AS nameth,
+                m.name_en AS nameen,
+                m.endpoint,
+                m.menu_type AS menutype,
+                m.external_url AS externalurl,
+                m.target_path AS targetpath,
+                m.open_mode AS openmode,
+                m.seq,
+                m.is_public AS ispublic,
+                COALESCE(ump.is_read, FALSE) AS isread,
+                COALESCE(ump.is_create, FALSE) AS iscreate,
+                COALESCE(ump.is_update, FALSE) AS isupdate,
+                COALESCE(ump.is_delete, FALSE) AS isdelete,
+                COALESCE(ump.is_import, FALSE) AS isimport,
+                COALESCE(ump.is_export, FALSE) AS isexport
+            FROM menus m
+            LEFT JOIN user_menu_permissions ump ON ump.menu_id = m.id AND ump.user_id = @userId
+            WHERE m.deleted_at IS NULL
+            ORDER BY m.seq ASC, m.id ASC;";
+
+        var rows = (await conn.QueryAsync(new CommandDefinition(sql, new { userId }, cancellationToken: ct))).ToList();
+
+        var allItems = rows.Select(r => new
+        {
+            Id = (long)r.id,
+            ParentId = r.parentid != null ? (long)r.parentid : (long?)null,
+            NameTh = (string)r.nameth,
+            NameEn = (string)r.nameen,
+            Endpoint = (string?)r.endpoint,
+            MenuType = (int)r.menutype,
+            ExternalUrl = (string?)r.externalurl,
+            TargetPath = (string?)r.targetpath,
+            OpenMode = (int)r.openmode,
+            Seq = (int)r.seq,
+            IsPublic = (bool)r.ispublic,
+            IsRead = isAdmin || (bool)r.isread || (bool)r.ispublic,
+            IsCreate = isAdmin || (bool)r.iscreate,
+            IsUpdate = isAdmin || (bool)r.isupdate,
+            IsDelete = isAdmin || (bool)r.isdelete,
+            IsImport = isAdmin || (bool)r.isimport,
+            IsExport = isAdmin || (bool)r.isexport,
+        }).ToList();
+
+        // If not admin, collect IDs of all menus where IsRead is true, PLUS their parent ancestors
+        var accessibleIds = new HashSet<long>();
+        if (isAdmin)
+        {
+            foreach (var item in allItems) accessibleIds.Add(item.Id);
+        }
+        else
+        {
+            var itemMap = allItems.ToDictionary(i => i.Id);
+            foreach (var item in allItems.Where(i => i.IsRead))
+            {
+                var current = item;
+                while (current != null)
+                {
+                    accessibleIds.Add(current.Id);
+                    if (current.ParentId != null && itemMap.TryGetValue(current.ParentId.Value, out var parent))
+                    {
+                        current = parent;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        var visibleNodes = allItems
+            .Where(i => accessibleIds.Contains(i.Id))
+            .Select(i => new UserNavMenuDto
+            {
+                Id = i.Id,
+                ParentId = i.ParentId,
+                NameTh = i.NameTh,
+                NameEn = i.NameEn,
+                Endpoint = i.Endpoint,
+                MenuType = i.MenuType,
+                ExternalUrl = i.ExternalUrl,
+                TargetPath = i.TargetPath,
+                OpenMode = i.OpenMode,
+                Seq = i.Seq,
+                IsRead = i.IsRead,
+                IsCreate = i.IsCreate,
+                IsUpdate = i.IsUpdate,
+                IsDelete = i.IsDelete,
+                IsImport = i.IsImport,
+                IsExport = i.IsExport,
+                Children = []
+            }).ToList();
+
+        var childrenByParent = visibleNodes
+            .GroupBy(n => n.ParentId ?? 0)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        List<UserNavMenuDto> BuildNavTree(long parentId)
+        {
+            if (!childrenByParent.TryGetValue(parentId, out var children)) return [];
+            foreach (var child in children)
+            {
+                child.Children = BuildNavTree(child.Id);
+            }
+            return children.OrderBy(c => c.Seq).ThenBy(c => c.Id).ToList();
+        }
+
+        return BuildNavTree(0);
+    }
 }
 

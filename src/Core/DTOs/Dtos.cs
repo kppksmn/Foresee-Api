@@ -527,5 +527,69 @@ public class MenuManagementMenuTreeResponse
     };
 }
 
+public class UserMenuPermissionNodeDto
+{
+    public long MenuId { get; set; }
+    public long? ParentId { get; set; }
+    public string NameTh { get; set; } = string.Empty;
+    public string NameEn { get; set; } = string.Empty;
+    public string? Endpoint { get; set; }
+    public int Seq { get; set; }
+    public bool IsPublic { get; set; }
+    public bool IsMarketing { get; set; }
 
+    // Menu capabilities (whether the feature exists for this menu)
+    public bool CanRead { get; set; }
+    public bool CanCreate { get; set; }
+    public bool CanUpdate { get; set; }
+    public bool CanDelete { get; set; }
+    public bool CanImport { get; set; }
+    public bool CanExport { get; set; }
 
+    // User's granted permissions
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+
+    public List<UserMenuPermissionNodeDto> Children { get; set; } = [];
+}
+
+public class UserMenuPermissionItemRequest
+{
+    public long MenuId { get; set; }
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+}
+
+public class UpdateUserMenuPermissionsRequest
+{
+    public List<UserMenuPermissionItemRequest> Permissions { get; set; } = [];
+}
+
+public class UserNavMenuDto
+{
+    public long Id { get; set; }
+    public long? ParentId { get; set; }
+    public string NameTh { get; set; } = string.Empty;
+    public string NameEn { get; set; } = string.Empty;
+    public string? Endpoint { get; set; }
+    public int MenuType { get; set; } = 1;
+    public string? ExternalUrl { get; set; }
+    public string? TargetPath { get; set; }
+    public int OpenMode { get; set; } = 1;
+    public int Seq { get; set; }
+    public bool IsRead { get; set; }
+    public bool IsCreate { get; set; }
+    public bool IsUpdate { get; set; }
+    public bool IsDelete { get; set; }
+    public bool IsImport { get; set; }
+    public bool IsExport { get; set; }
+    public List<UserNavMenuDto> Children { get; set; } = [];
+}
