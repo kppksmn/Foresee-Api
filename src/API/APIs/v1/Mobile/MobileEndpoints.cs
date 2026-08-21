@@ -152,10 +152,13 @@ public static class MobileEndpoints
 
         var jobsGroup = mobileGroup.MapGroup("/jobs").RequireAuthorization("MobileDriver");
 
+        const int fixedPageSize = 25;
+
         jobsGroup.MapGet("/", async (ICurrentUser currentUser, ICurrentDriver currentDriver, JobRepository jobRepo, CancellationToken ct) =>
         {
             if (currentUser.UserId <= 0) return Results.Unauthorized();
-            var jobs = await jobRepo.GetUnfinishedJobsForDriverAsync(currentUser.UserId, currentDriver.DriverId, ct);
+            bool isAdmin = string.Equals(currentUser.Role, "Admin", StringComparison.OrdinalIgnoreCase);
+            var jobs = await jobRepo.GetUnfinishedJobsForDriverAsync(currentUser.UserId, currentDriver.DriverId, isAdmin, ct);
             return Results.Ok(ApiResponse<IEnumerable<JobDto>>.Ok(jobs));
         })
         .Produces<ApiResponse<IEnumerable<JobDto>>>(StatusCodes.Status200OK)
@@ -163,7 +166,57 @@ public static class MobileEndpoints
         .WithSummary("ดึงรายการงานที่ยังไม่เสร็จทั้งหมดของคนขับ (Active Jobs)")
         .WithDescription("ดึงรายการงานที่มีสถานะ Pending, Assigned, Started, Arrived ของคนขับที่ยืนยันตัวตนด้วย Access Token");
 
-        const int fixedPageSize = 25;
+        async Task<IResult> HandleGetMobileJobsAsync(
+            JobListRequestDto? req,
+            ICurrentUser currentUser, 
+            ICurrentDriver currentDriver, 
+            JobRepository jobRepo, 
+            CancellationToken ct)
+        {
+            if (currentUser.UserId <= 0) return Results.Unauthorized();
+            bool isAdmin = string.Equals(currentUser.Role, "Admin", StringComparison.OrdinalIgnoreCase);
+
+            var pageSize = req?.PageSize ?? fixedPageSize;
+            var reqOffset = req?.Offset ?? pageSize;
+            var sqlOffset = reqOffset <= pageSize ? 0 : reqOffset - pageSize;
+
+            var (items, totalCount) = await jobRepo.GetUnfinishedJobsForDriverPaginatedAsync(
+                currentUser.UserId, 
+                currentDriver.DriverId, 
+                isAdmin,
+                req?.Status,
+                req?.Search,
+                sqlOffset, 
+                pageSize, 
+                ct);
+
+            var result = new JobListResponseDto
+            {
+                Items = items,
+                TotalCount = totalCount
+            };
+
+            return Results.Ok(ApiResponse<JobListResponseDto>.Ok(result));
+        }
+
+        jobsGroup.MapPost("/", async ([FromBody] JobListRequestDto? req, ICurrentUser currentUser, ICurrentDriver currentDriver, JobRepository jobRepo, CancellationToken ct) =>
+            await HandleGetMobileJobsAsync(req, currentUser, currentDriver, jobRepo, ct))
+        .Produces<ApiResponse<JobListResponseDto>>(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status401Unauthorized)
+        .WithSummary("ดึงรายการงานทั้งหมดของคนขับ/แอดมินแบบ POST Body ส่ง offset (Mobile Active Jobs with Offset)")
+        .WithDescription("ส่ง JSON Body เช่น { \"offset\": 25, \"pageSize\": 25, \"status\": \"Assigned\", \"search\": \"...\" } เพื่อดึงรายการงานแบบแบ่งหน้า");
+
+        jobsGroup.MapPost("/list", async ([FromBody] JobListRequestDto? req, ICurrentUser currentUser, ICurrentDriver currentDriver, JobRepository jobRepo, CancellationToken ct) =>
+            await HandleGetMobileJobsAsync(req, currentUser, currentDriver, jobRepo, ct))
+        .Produces<ApiResponse<JobListResponseDto>>(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status401Unauthorized)
+        .WithSummary("ดึงรายการงานทั้งหมดแบบ POST Body ส่ง offset (/jobs/list)");
+
+        jobsGroup.MapPost("/all", async ([FromBody] JobListRequestDto? req, ICurrentUser currentUser, ICurrentDriver currentDriver, JobRepository jobRepo, CancellationToken ct) =>
+            await HandleGetMobileJobsAsync(req, currentUser, currentDriver, jobRepo, ct))
+        .Produces<ApiResponse<JobListResponseDto>>(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status401Unauthorized)
+        .WithSummary("ดึงรายการงานทั้งหมดแบบ POST Body ส่ง offset (/jobs/all)");
 
         jobsGroup.MapPost("/history", async (
             [FromBody] JobHistoryRequestDto? req,
@@ -173,6 +226,7 @@ public static class MobileEndpoints
             CancellationToken ct) =>
         {
             if (currentUser.UserId <= 0) return Results.Unauthorized();
+            bool isAdmin = currentUser.Role == "Admin";
 
             var reqOffset = req?.Offset ?? fixedPageSize;
             var sqlOffset = reqOffset <= fixedPageSize ? 0 : reqOffset - fixedPageSize;
@@ -183,6 +237,7 @@ public static class MobileEndpoints
                 req?.Status,
                 sqlOffset, 
                 fixedPageSize, 
+                isAdmin,
                 ct);
 
             var result = new JobHistoryResponseDto

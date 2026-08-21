@@ -15,12 +15,17 @@ public class CurrentUser : ICurrentUser
         var user = httpContextAccessor.HttpContext?.User;
         if (user?.Identity?.IsAuthenticated == true)
         {
-            var sub = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("sub");
+            var sub = user.FindFirstValue(ClaimTypes.NameIdentifier) 
+                   ?? user.FindFirstValue("sub") 
+                   ?? user.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub);
             if (long.TryParse(sub, out var userId))
             {
                 UserId = userId;
             }
-            Role = user.FindFirstValue(ClaimTypes.Role) ?? string.Empty;
+            Role = user.FindFirstValue(ClaimTypes.Role) 
+                ?? user.FindFirstValue("role") 
+                ?? user.FindFirstValue("http://schemas.microsoft.com/ws/2008/06/identity/claims/role") 
+                ?? string.Empty;
         }
         else
         {

@@ -10,6 +10,31 @@ namespace API.APIs.v1.Admin;
 
 public static class AdminEndpoints
 {
+    public static DateTime? NormalizeToUtc(DateTime? dt)
+    {
+        if (!dt.HasValue) return null;
+
+        if (dt.Value.Kind == DateTimeKind.Utc)
+        {
+            return dt.Value;
+        }
+
+        if (dt.Value.Kind == DateTimeKind.Local)
+        {
+            return dt.Value.ToUniversalTime();
+        }
+
+        try
+        {
+            var bangkokZone = TimeZoneInfo.FindSystemTimeZoneById(OperatingSystem.IsWindows() ? "SE Asia Standard Time" : "Asia/Bangkok");
+            return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(dt.Value, DateTimeKind.Unspecified), bangkokZone);
+        }
+        catch
+        {
+            return DateTime.SpecifyKind(dt.Value.AddHours(-7), DateTimeKind.Utc);
+        }
+    }
+
     public static void MapAdminEndpoints(this IEndpointRouteBuilder routes)
     {
         var adminGroup = routes.MapGroup("/api/v1/admin").RequireAuthorization("AdminOnly").WithTags("Web Admin");
@@ -24,9 +49,66 @@ public static class AdminEndpoints
         group.MapPost("/jobs", async ([FromBody] CreateJobDto req, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
             using var conn = db.CreateConnection();
+            var scheduledStartAtUtc = NormalizeToUtc(req.ScheduledStartAt);
+
+            // Validate driver and companion schedule conflict at the same date and arrival time
+            if (scheduledStartAtUtc.HasValue)
+            {
+                if (req.DriverId.HasValue)
+                {
+                    var driverConflict = await conn.QueryFirstOrDefaultAsync(@"
+                        SELECT job_number AS ""jobNumber"", title 
+                        FROM jobs 
+                        WHERE (driver_id = @DriverId OR companion_id = @DriverId)
+                          AND status NOT IN ('Completed', 'Cancelled')
+                          AND deleted_at IS NULL
+                          AND DATE_TRUNC('minute', scheduled_start_at) = DATE_TRUNC('minute', @scheduledStartAtUtc::timestamptz)
+                        LIMIT 1;", new { req.DriverId, scheduledStartAtUtc });
+
+                    if (driverConflict != null)
+                    {
+                        return Results.BadRequest(ApiResponse<string>.Fail($"พนักงานขับรถมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {driverConflict.jobNumber})"));
+                    }
+                }
+
+                if (req.CompanionId.HasValue)
+                {
+                    var companionConflict = await conn.QueryFirstOrDefaultAsync(@"
+                        SELECT job_number AS ""jobNumber"", title 
+                        FROM jobs 
+                        WHERE (driver_id = @CompanionId OR companion_id = @CompanionId)
+                          AND status NOT IN ('Completed', 'Cancelled')
+                          AND deleted_at IS NULL
+                          AND DATE_TRUNC('minute', scheduled_start_at) = DATE_TRUNC('minute', @scheduledStartAtUtc::timestamptz)
+                        LIMIT 1;", new { req.CompanionId, scheduledStartAtUtc });
+
+                    if (companionConflict != null)
+                    {
+                        return Results.BadRequest(ApiResponse<string>.Fail($"ผู้ติดตามมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {companionConflict.jobNumber})"));
+                    }
+                }
+
+                if (req.VehicleId.HasValue)
+                {
+                    var vehicleConflict = await conn.QueryFirstOrDefaultAsync(@"
+                        SELECT job_number AS ""jobNumber"", title 
+                        FROM jobs 
+                        WHERE vehicle_id = @VehicleId
+                          AND status NOT IN ('Completed', 'Cancelled')
+                          AND deleted_at IS NULL
+                          AND DATE_TRUNC('minute', scheduled_start_at) = DATE_TRUNC('minute', @scheduledStartAtUtc::timestamptz)
+                        LIMIT 1;", new { req.VehicleId, scheduledStartAtUtc });
+
+                    if (vehicleConflict != null)
+                    {
+                        return Results.BadRequest(ApiResponse<string>.Fail($"รถที่เลือกมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {vehicleConflict.jobNumber})"));
+                    }
+                }
+            }
+
             var sql = @"
-                INSERT INTO jobs (job_number, title, description, driver_id, vehicle_id, status, pickup_location, pickup_lat, pickup_lng, contact_name, contact_phone, companions, scheduled_start_at, created_by, created_at)
-                VALUES (@JobNumber, @Title, @Description, @DriverId, @VehicleId, @Status, @PickupLocation, @PickupLat, @PickupLng, @ContactName, @ContactPhone, @Companions, @ScheduledStartAt, @CreatedBy, @CreatedAt)
+                INSERT INTO jobs (job_number, title, description, driver_id, vehicle_id, status, pickup_location, pickup_lat, pickup_lng, contact_name, contact_phone, companions, companion_id, scheduled_start_at, created_by, created_at)
+                VALUES (@JobNumber, @Title, @Description, @DriverId, @VehicleId, @Status, @PickupLocation, @PickupLat, @PickupLng, @ContactName, @ContactPhone, @Companions, @CompanionId, @ScheduledStartAt, @CreatedBy, @CreatedAt)
                 RETURNING id;";
 
             var status = req.DriverId.HasValue ? "Assigned" : "Pending";
@@ -46,7 +128,8 @@ public static class AdminEndpoints
                 req.ContactName,
                 req.ContactPhone,
                 req.Companions,
-                req.ScheduledStartAt,
+                req.CompanionId,
+                ScheduledStartAt = scheduledStartAtUtc,
                 CreatedBy = user.UserId,
                 CreatedAt = DateTime.UtcNow
             }, cancellationToken: ct));
@@ -57,6 +140,10 @@ public static class AdminEndpoints
             if (req.DriverId.HasValue)
             {
                 _ = pushNotificationService.SendJobAssignedNotificationAsync(req.DriverId.Value, id, jobNumber, req.Title, req.PickupLocation, ct);
+            }
+            if (req.CompanionId.HasValue && req.CompanionId.Value != req.DriverId)
+            {
+                _ = pushNotificationService.SendJobAssignedNotificationAsync(req.CompanionId.Value, id, jobNumber, req.Title, req.PickupLocation, ct);
             }
 
             List<string>? warnings = null;
@@ -79,25 +166,88 @@ public static class AdminEndpoints
         group.MapPost("/jobs/{jobId:long}/assign", async (long jobId, [FromBody] AssignJobDto req, ICurrentUser user, DbConnectionFactory db, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
             using var conn = db.CreateConnection();
-            var jobInfo = await conn.QueryFirstOrDefaultAsync("SELECT driver_id AS \"driverId\", job_number AS \"jobNumber\", title, pickup_location AS \"pickupLocation\" FROM jobs WHERE id = @jobId AND deleted_at IS NULL;", new { jobId });
+            var jobInfo = await conn.QueryFirstOrDefaultAsync(@"
+                SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", job_number AS ""jobNumber"", title, pickup_location AS ""pickupLocation"", scheduled_start_at AS ""scheduledStartAt"" 
+                FROM jobs 
+                WHERE id = @jobId AND deleted_at IS NULL;", new { jobId });
             if (jobInfo == null) return Results.NotFound(ApiResponse<string>.Fail("Job not found"));
 
             var previousDriverId = jobInfo.driverId != null ? (long?)Convert.ToInt64(jobInfo.driverId) : null;
+            var previousCompanionId = jobInfo.companionId != null ? (long?)Convert.ToInt64(jobInfo.companionId) : null;
+            var targetScheduledTime = (DateTime?)jobInfo.scheduledStartAt;
+
+            if (targetScheduledTime.HasValue)
+            {
+                var driverConflict = await conn.QueryFirstOrDefaultAsync(@"
+                    SELECT job_number AS ""jobNumber"", title 
+                    FROM jobs 
+                    WHERE (driver_id = @DriverId OR companion_id = @DriverId)
+                      AND status NOT IN ('Completed', 'Cancelled')
+                      AND deleted_at IS NULL
+                      AND id != @jobId
+                      AND scheduled_start_at = @targetScheduledTime
+                    LIMIT 1;", new { req.DriverId, targetScheduledTime, jobId });
+
+                if (driverConflict != null)
+                {
+                    return Results.BadRequest(ApiResponse<string>.Fail($"พนักงานขับรถมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {driverConflict.jobNumber})"));
+                }
+
+                var checkCompanionId = req.CompanionId ?? previousCompanionId;
+                if (checkCompanionId.HasValue && checkCompanionId.Value != req.DriverId)
+                {
+                    var companionConflict = await conn.QueryFirstOrDefaultAsync(@"
+                        SELECT job_number AS ""jobNumber"", title 
+                        FROM jobs 
+                        WHERE (driver_id = @checkCompanionId OR companion_id = @checkCompanionId)
+                          AND status NOT IN ('Completed', 'Cancelled')
+                          AND deleted_at IS NULL
+                          AND id != @jobId
+                          AND scheduled_start_at = @targetScheduledTime
+                        LIMIT 1;", new { checkCompanionId = checkCompanionId.Value, targetScheduledTime, jobId });
+
+                    if (companionConflict != null)
+                    {
+                        return Results.BadRequest(ApiResponse<string>.Fail($"ผู้ติดตามมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {companionConflict.jobNumber})"));
+                    }
+                }
+            }
 
             var sql = @"
                 UPDATE jobs 
-                SET driver_id = @DriverId, vehicle_id = COALESCE(@VehicleId, vehicle_id), status = 'Assigned', updated_at = @Now, updated_by = @UserId
+                SET driver_id = @DriverId, 
+                    vehicle_id = COALESCE(@VehicleId, vehicle_id), 
+                    companion_id = CASE WHEN @HasCompanionParam THEN @CompanionId ELSE companion_id END,
+                    status = 'Assigned', 
+                    updated_at = @Now, 
+                    updated_by = @UserId
                 WHERE id = @jobId AND deleted_at IS NULL;";
 
-            var affected = await conn.ExecuteAsync(new CommandDefinition(sql, new { jobId, req.DriverId, req.VehicleId, Now = DateTime.UtcNow, user.UserId }, cancellationToken: ct));
+            var affected = await conn.ExecuteAsync(new CommandDefinition(sql, new 
+            { 
+                jobId, 
+                req.DriverId, 
+                req.VehicleId, 
+                CompanionId = req.CompanionId,
+                HasCompanionParam = req.CompanionId.HasValue,
+                Now = DateTime.UtcNow, 
+                user.UserId 
+            }, cancellationToken: ct));
             if (affected == 0) return Results.NotFound(ApiResponse<string>.Fail("Job not found"));
 
-            // Send Push Notifications
+            // Send Push Notifications to Driver
             if (previousDriverId.HasValue && previousDriverId.Value != req.DriverId)
             {
                 _ = pushNotificationService.SendJobCancelledNotificationAsync(previousDriverId.Value, jobId, (string)jobInfo.jobNumber, (string)jobInfo.title, "งานถูกเปลี่ยนผู้ขับขี่หรือมอบหมายให้พนักงานท่านอื่น", ct);
             }
             _ = pushNotificationService.SendJobAssignedNotificationAsync(req.DriverId, jobId, (string)jobInfo.jobNumber, (string)jobInfo.title, (string)jobInfo.pickupLocation, ct);
+
+            // Send Push Notifications to Companion
+            var targetCompanionId = req.CompanionId ?? previousCompanionId;
+            if (targetCompanionId.HasValue && targetCompanionId.Value != req.DriverId)
+            {
+                _ = pushNotificationService.SendJobAssignedNotificationAsync(targetCompanionId.Value, jobId, (string)jobInfo.jobNumber, (string)jobInfo.title, (string)jobInfo.pickupLocation, ct);
+            }
 
             List<string>? warnings = null;
             var profileRepo = new UserProfileRepository(db);
@@ -117,7 +267,7 @@ public static class AdminEndpoints
         {
             using var conn = db.CreateConnection();
             var jobInfo = await conn.QueryFirstOrDefaultAsync(@"
-                SELECT driver_id AS ""driverId"", job_number AS ""jobNumber"", title, status 
+                SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", job_number AS ""jobNumber"", title, status 
                 FROM jobs 
                 WHERE id = @jobId AND deleted_at IS NULL;", new { jobId });
             if (jobInfo == null) return Results.NotFound(ApiResponse<string>.Fail("Job not found"));
@@ -136,13 +286,21 @@ public static class AdminEndpoints
                 VALUES (@jobId, @FromStatus, 'Cancelled', @UserId, @Reason, @Now);";
             await conn.ExecuteAsync(new CommandDefinition(historySql, new { jobId, FromStatus = (string)jobInfo.status, UserId = user.UserId, Reason = req.Reason, Now = DateTime.UtcNow }, cancellationToken: ct));
 
-            // Send push notification if driver is assigned
+            // Send push notification to assigned driver and companion
+            string jobNum = (string)jobInfo.jobNumber ?? jobId.ToString();
+            string title = (string)jobInfo.title ?? "";
             if (jobInfo.driverId != null)
             {
                 long driverId = Convert.ToInt64(jobInfo.driverId);
-                string jobNum = (string)jobInfo.jobNumber ?? jobId.ToString();
-                string title = (string)jobInfo.title ?? "";
                 _ = pushNotificationService.SendJobCancelledNotificationAsync(driverId, jobId, jobNum, title, req.Reason, ct);
+            }
+            if (jobInfo.companionId != null)
+            {
+                long companionId = Convert.ToInt64(jobInfo.companionId);
+                if (jobInfo.driverId == null || companionId != Convert.ToInt64(jobInfo.driverId))
+                {
+                    _ = pushNotificationService.SendJobCancelledNotificationAsync(companionId, jobId, jobNum, title, req.Reason, ct);
+                }
             }
 
             var targetJobNumber = (string)jobInfo.jobNumber ?? jobId.ToString();
@@ -194,9 +352,19 @@ public static class AdminEndpoints
         {
             using var conn = db.CreateConnection();
             var sql = @"
-                SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.status,
+                SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
                        j.pickup_location AS ""pickupLocation"", j.pickup_lat AS ""pickupLat"", j.pickup_lng AS ""pickupLng"",
                        j.contact_name AS ""contactName"", j.contact_phone AS ""contactPhone"", j.companions,
+                       j.companion_id AS ""companionId"",
+                       j.scheduled_start_at AS ""scheduledStartAt"",
+                       CASE 
+                           WHEN j.companion_id IS NULL THEN j.companions
+                           ELSE COALESCE(
+                               NULLIF(TRIM(COALESCE(cp_p.first_name, '') || ' ' || COALESCE(cp_p.last_name, '')), ''),
+                               cp_u.username,
+                               j.companions
+                           )
+                       END AS ""companionName"",
                        j.cancellation_reason AS ""cancellationReason"",
                        j.cancelled_at AS ""cancelledAt"",
                        j.cancelled_by AS ""cancelledBy"",
@@ -222,8 +390,8 @@ public static class AdminEndpoints
                                ELSE NULL
                            END
                        ) AS ""cancelledByName"",
-                       TO_CHAR(j.scheduled_start_at, 'YYYY-MM-DD') AS ""scheduledDate"",
-                       TO_CHAR(j.scheduled_start_at, 'HH24:MI') AS ""scheduledTime"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') AS ""scheduledDate"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'HH24:MI') AS ""scheduledTime"",
                        CASE 
                            WHEN j.driver_id IS NULL THEN NULL
                            ELSE COALESCE(
@@ -237,6 +405,8 @@ public static class AdminEndpoints
                 FROM jobs j
                 LEFT JOIN user_profiles p ON p.user_id = j.driver_id
                 LEFT JOIN users u ON u.id = j.driver_id
+                LEFT JOIN user_profiles cp_p ON cp_p.user_id = j.companion_id AND cp_p.deleted_at IS NULL
+                LEFT JOIN users cp_u ON cp_u.id = j.companion_id AND cp_u.deleted_at IS NULL
                 LEFT JOIN vehicles v ON v.id = j.vehicle_id AND v.deleted_at IS NULL
                 LEFT JOIN vehicle_types vt ON vt.id = v.vehicle_type_id
                 LEFT JOIN users cb_u ON cb_u.id = j.cancelled_by AND cb_u.deleted_at IS NULL
@@ -266,13 +436,56 @@ public static class AdminEndpoints
         .Produces<ApiResponse<IEnumerable<AdminJobListItemDto>>>(StatusCodes.Status200OK)
         .WithSummary("ดึงรายการงานขนส่งทั้งหมด (List Jobs)");
 
-        group.MapGet("/jobs/{id:long}", async (long id, DbConnectionFactory db, CancellationToken ct) =>
+        async Task<IResult> HandleAdminJobListPostAsync([FromBody] AdminJobListRequestDto? req, DbConnectionFactory db, CancellationToken ct)
         {
             using var conn = db.CreateConnection();
+            var search = req?.Search;
+            var status = req?.Status;
+            var mode = req?.Mode;
+            var pageSize = req?.PageSize ?? 25;
+            var reqOffset = req?.Offset ?? (req?.Page.HasValue == true ? req.Page.Value * pageSize : pageSize);
+            var sqlOffset = reqOffset <= pageSize ? 0 : reqOffset - pageSize;
+
+            var countSql = @"
+                SELECT COUNT(1)
+                FROM jobs j
+                LEFT JOIN user_profiles p ON p.user_id = j.driver_id
+                LEFT JOIN users u ON u.id = j.driver_id
+                LEFT JOIN vehicles v ON v.id = j.vehicle_id AND v.deleted_at IS NULL
+                WHERE j.deleted_at IS NULL
+                  AND (@status IS NULL OR @status = '' OR j.status = @status)
+                  AND (
+                    CASE 
+                      WHEN @mode = 'history' THEN j.status IN ('Completed', 'Cancelled')
+                      ELSE j.status NOT IN ('Completed', 'Cancelled')
+                    END
+                  )
+                  AND (
+                    @search IS NULL OR @search = '' OR 
+                    j.job_number ILIKE '%' || @search || '%' OR 
+                    j.title ILIKE '%' || @search || '%' OR
+                    j.pickup_location ILIKE '%' || @search || '%' OR
+                    COALESCE(j.contact_name, '') ILIKE '%' || @search || '%' OR
+                    COALESCE(p.first_name || ' ' || p.last_name, u.username, '') ILIKE '%' || @search || '%' OR
+                    COALESCE(v.plate_number, '') ILIKE '%' || @search || '%'
+                  );";
+
+            var totalCount = await conn.ExecuteScalarAsync<int>(new CommandDefinition(countSql, new { search, status, mode }, cancellationToken: ct));
+
             var sql = @"
                 SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
                        j.pickup_location AS ""pickupLocation"", j.pickup_lat AS ""pickupLat"", j.pickup_lng AS ""pickupLng"",
                        j.contact_name AS ""contactName"", j.contact_phone AS ""contactPhone"", j.companions,
+                       j.companion_id AS ""companionId"",
+                       j.scheduled_start_at AS ""scheduledStartAt"",
+                       CASE 
+                           WHEN j.companion_id IS NULL THEN j.companions
+                           ELSE COALESCE(
+                               NULLIF(TRIM(COALESCE(cp_p.first_name, '') || ' ' || COALESCE(cp_p.last_name, '')), ''),
+                               cp_u.username,
+                               j.companions
+                           )
+                       END AS ""companionName"",
                        j.cancellation_reason AS ""cancellationReason"",
                        j.cancelled_at AS ""cancelledAt"",
                        j.cancelled_by AS ""cancelledBy"",
@@ -298,8 +511,106 @@ public static class AdminEndpoints
                                ELSE NULL
                            END
                        ) AS ""cancelledByName"",
-                       TO_CHAR(j.scheduled_start_at, 'YYYY-MM-DD') AS ""scheduledDate"",
-                       TO_CHAR(j.scheduled_start_at, 'HH24:MI') AS ""scheduledTime"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') AS ""scheduledDate"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'HH24:MI') AS ""scheduledTime"",
+                       CASE 
+                           WHEN j.driver_id IS NULL THEN NULL
+                           ELSE COALESCE(
+                               NULLIF(TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')), ''),
+                               u.username,
+                               'พนักงาน #' || CAST(j.driver_id AS TEXT)
+                           )
+                       END AS ""driverName"",
+                       v.plate_number AS ""vehiclePlate"",
+                       vt.name AS ""vehicleType""
+                FROM jobs j
+                LEFT JOIN user_profiles p ON p.user_id = j.driver_id
+                LEFT JOIN users u ON u.id = j.driver_id
+                LEFT JOIN user_profiles cp_p ON cp_p.user_id = j.companion_id AND cp_p.deleted_at IS NULL
+                LEFT JOIN users cp_u ON cp_u.id = j.companion_id AND cp_u.deleted_at IS NULL
+                LEFT JOIN vehicles v ON v.id = j.vehicle_id AND v.deleted_at IS NULL
+                LEFT JOIN vehicle_types vt ON vt.id = v.vehicle_type_id
+                LEFT JOIN users cb_u ON cb_u.id = j.cancelled_by AND cb_u.deleted_at IS NULL
+                LEFT JOIN user_profiles cb_p ON cb_p.user_id = cb_u.id AND cb_p.deleted_at IS NULL
+                WHERE j.deleted_at IS NULL
+                  AND (@status IS NULL OR @status = '' OR j.status = @status)
+                  AND (
+                    CASE 
+                      WHEN @mode = 'history' THEN j.status IN ('Completed', 'Cancelled')
+                      ELSE j.status NOT IN ('Completed', 'Cancelled')
+                    END
+                  )
+                  AND (
+                    @search IS NULL OR @search = '' OR 
+                    j.job_number ILIKE '%' || @search || '%' OR 
+                    j.title ILIKE '%' || @search || '%' OR
+                    j.pickup_location ILIKE '%' || @search || '%' OR
+                    COALESCE(j.contact_name, '') ILIKE '%' || @search || '%' OR
+                    COALESCE(p.first_name || ' ' || p.last_name, u.username, '') ILIKE '%' || @search || '%' OR
+                    COALESCE(v.plate_number, '') ILIKE '%' || @search || '%'
+                  )
+                ORDER BY j.id DESC
+                LIMIT @pageSize OFFSET @sqlOffset;";
+
+            var list = await conn.QueryAsync<AdminJobListItemDto>(new CommandDefinition(sql, new { search, status, mode, pageSize, sqlOffset }, cancellationToken: ct));
+            return Results.Ok(ApiResponse<AdminJobListResponseDto>.Ok(new AdminJobListResponseDto
+            {
+                Items = list,
+                TotalCount = totalCount
+            }));
+        }
+
+        group.MapPost("/jobs/list", HandleAdminJobListPostAsync)
+        .Produces<ApiResponse<AdminJobListResponseDto>>(StatusCodes.Status200OK)
+        .WithSummary("ดึงรายการงานขนส่งแบบ POST Body ส่ง offset (Admin Jobs List with Offset)");
+
+        group.MapPost("/jobs/all", HandleAdminJobListPostAsync)
+        .Produces<ApiResponse<AdminJobListResponseDto>>(StatusCodes.Status200OK)
+        .WithSummary("ดึงรายการงานขนส่งทั้งหมดแบบ POST Body ส่ง offset (/jobs/all)");
+
+        group.MapGet("/jobs/{id:long}", async (long id, DbConnectionFactory db, CancellationToken ct) =>
+        {
+            using var conn = db.CreateConnection();
+            var sql = @"
+                SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
+                       j.pickup_location AS ""pickupLocation"", j.pickup_lat AS ""pickupLat"", j.pickup_lng AS ""pickupLng"",
+                       j.contact_name AS ""contactName"", j.contact_phone AS ""contactPhone"", j.companions,
+                       j.companion_id AS ""companionId"",
+                       CASE 
+                           WHEN j.companion_id IS NULL THEN j.companions
+                           ELSE COALESCE(
+                               NULLIF(TRIM(COALESCE(cp_p.first_name, '') || ' ' || COALESCE(cp_p.last_name, '')), ''),
+                               cp_u.username,
+                               j.companions
+                           )
+                       END AS ""companionName"",
+                       j.cancellation_reason AS ""cancellationReason"",
+                       j.cancelled_at AS ""cancelledAt"",
+                       j.cancelled_by AS ""cancelledBy"",
+                       COALESCE(
+                           NULLIF(TRIM(COALESCE(cb_p.first_name, '') || ' ' || COALESCE(cb_p.last_name, '')), ''),
+                           cb_u.username,
+                           (
+                               SELECT COALESCE(NULLIF(TRIM(COALESCE(h_p.first_name, '') || ' ' || COALESCE(h_p.last_name, '')), ''), h_u.username)
+                               FROM job_status_histories h
+                               JOIN users h_u ON h_u.id = h.changed_by
+                               LEFT JOIN user_profiles h_p ON h_p.user_id = h_u.id AND h_p.deleted_at IS NULL
+                               WHERE h.job_id = j.id AND h.to_status = 'Cancelled'
+                               ORDER BY h.created_at DESC
+                               LIMIT 1
+                           ),
+                           CASE 
+                               WHEN j.status = 'Cancelled' AND j.updated_by IS NOT NULL THEN (
+                                   SELECT COALESCE(NULLIF(TRIM(COALESCE(up_p.first_name, '') || ' ' || COALESCE(up_p.last_name, '')), ''), up_u.username)
+                                   FROM users up_u
+                                   LEFT JOIN user_profiles up_p ON up_p.user_id = up_u.id AND up_p.deleted_at IS NULL
+                                   WHERE up_u.id = j.updated_by
+                               )
+                               ELSE NULL
+                           END
+                       ) AS ""cancelledByName"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') AS ""scheduledDate"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'HH24:MI') AS ""scheduledTime"",
                        j.scheduled_start_at AS ""scheduledStartAt"",
                        CASE 
                            WHEN j.driver_id IS NULL THEN NULL
@@ -313,6 +624,8 @@ public static class AdminEndpoints
                 FROM jobs j
                 LEFT JOIN user_profiles p ON p.user_id = j.driver_id AND p.deleted_at IS NULL
                 LEFT JOIN users u ON u.id = j.driver_id AND u.deleted_at IS NULL
+                LEFT JOIN user_profiles cp_p ON cp_p.user_id = j.companion_id AND cp_p.deleted_at IS NULL
+                LEFT JOIN users cp_u ON cp_u.id = j.companion_id AND cp_u.deleted_at IS NULL
                 LEFT JOIN vehicles v ON v.id = j.vehicle_id AND v.deleted_at IS NULL
                 LEFT JOIN users cb_u ON cb_u.id = j.cancelled_by AND cb_u.deleted_at IS NULL
                 LEFT JOIN user_profiles cb_p ON cb_p.user_id = cb_u.id AND cb_p.deleted_at IS NULL
@@ -331,7 +644,7 @@ public static class AdminEndpoints
         {
             using var conn = db.CreateConnection();
             var oldJobSql = @"
-                SELECT j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
+                SELECT j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.companion_id AS ""companionId"", j.vehicle_id AS ""vehicleId"", j.status,
                        j.pickup_location AS ""pickupLocation"", j.pickup_lat AS ""pickupLat"", j.pickup_lng AS ""pickupLng"",
                        j.contact_name AS ""contactName"", j.contact_phone AS ""contactPhone"", j.companions,
                        j.scheduled_start_at AS ""scheduledStartAt""
@@ -345,10 +658,71 @@ public static class AdminEndpoints
                 if (!req.VehicleId.HasValue) return Results.BadRequest(ApiResponse<string>.Fail("สถานะงานที่ระบุจำเป็นต้องมียานพาหนะ"));
             }
 
+            // Validate driver and companion schedule conflict at the same date and arrival time (excluding current job)
+            var scheduledStartAtUtc = NormalizeToUtc(req.ScheduledStartAt);
+            var targetScheduledTime = scheduledStartAtUtc ?? (DateTime?)oldJob.scheduledStartAt;
+            if (targetScheduledTime.HasValue && req.Status != "Cancelled" && (string)oldJob.status != "Cancelled")
+            {
+                if (req.DriverId.HasValue)
+                {
+                    var driverConflict = await conn.QueryFirstOrDefaultAsync(@"
+                        SELECT job_number AS ""jobNumber"", title 
+                        FROM jobs 
+                        WHERE (driver_id = @DriverId OR companion_id = @DriverId)
+                          AND status NOT IN ('Completed', 'Cancelled')
+                          AND deleted_at IS NULL
+                          AND id != @id
+                          AND DATE_TRUNC('minute', scheduled_start_at) = DATE_TRUNC('minute', @targetScheduledTime::timestamptz)
+                        LIMIT 1;", new { req.DriverId, targetScheduledTime, id });
+
+                    if (driverConflict != null)
+                    {
+                        return Results.BadRequest(ApiResponse<string>.Fail($"พนักงานขับรถมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {driverConflict.jobNumber})"));
+                    }
+                }
+
+                if (req.CompanionId.HasValue && (!req.DriverId.HasValue || req.CompanionId.Value != req.DriverId.Value))
+                {
+                    var companionConflict = await conn.QueryFirstOrDefaultAsync(@"
+                        SELECT job_number AS ""jobNumber"", title 
+                        FROM jobs 
+                        WHERE (driver_id = @CompanionId OR companion_id = @CompanionId)
+                          AND status NOT IN ('Completed', 'Cancelled')
+                          AND deleted_at IS NULL
+                          AND id != @id
+                          AND DATE_TRUNC('minute', scheduled_start_at) = DATE_TRUNC('minute', @targetScheduledTime::timestamptz)
+                        LIMIT 1;", new { req.CompanionId, targetScheduledTime, id });
+
+                    if (companionConflict != null)
+                    {
+                        return Results.BadRequest(ApiResponse<string>.Fail($"ผู้ติดตามมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {companionConflict.jobNumber})"));
+                    }
+                }
+
+                if (req.VehicleId.HasValue)
+                {
+                    var vehicleConflict = await conn.QueryFirstOrDefaultAsync(@"
+                        SELECT job_number AS ""jobNumber"", title 
+                        FROM jobs 
+                        WHERE vehicle_id = @VehicleId
+                          AND status NOT IN ('Completed', 'Cancelled')
+                          AND deleted_at IS NULL
+                          AND id != @id
+                          AND DATE_TRUNC('minute', scheduled_start_at) = DATE_TRUNC('minute', @targetScheduledTime::timestamptz)
+                        LIMIT 1;", new { req.VehicleId, targetScheduledTime, id });
+
+                    if (vehicleConflict != null)
+                    {
+                        return Results.BadRequest(ApiResponse<string>.Fail($"รถที่เลือกมีงานอื่นที่ยังไม่เสร็จสิ้นตรงกับวันที่และเวลานัดหมายนี้แล้ว (เลขที่งาน: {vehicleConflict.jobNumber})"));
+                    }
+                }
+            }
+
             var status = req.DriverId.HasValue ? "Assigned" : "Pending";
 
             // Check if driver was reassigned/changed, log to job_assignment_histories
-            var previousDriverId = (long?)oldJob.driverId;
+            var previousDriverId = oldJob.driverId != null ? (long?)Convert.ToInt64(oldJob.driverId) : null;
+            var previousCompanionId = oldJob.companionId != null ? (long?)Convert.ToInt64(oldJob.companionId) : null;
             if (req.DriverId.HasValue && req.DriverId != previousDriverId)
             {
                 var logSql = @"
@@ -363,6 +737,8 @@ public static class AdminEndpoints
                     description = @Description,
                     driver_id = @DriverId,
                     vehicle_id = @VehicleId,
+                    companion_id = @CompanionId,
+                    companions = @Companions,
                     status = CASE 
                         WHEN @ExplicitStatus IS NOT NULL AND @ExplicitStatus != '' THEN @ExplicitStatus
                         WHEN @DriverId IS NULL AND status IN ('Pending', 'Assigned') THEN 'Pending'
@@ -386,7 +762,6 @@ public static class AdminEndpoints
                     pickup_lng = @PickupLng,
                     contact_name = @ContactName,
                     contact_phone = @ContactPhone,
-                    companions = @Companions,
                     scheduled_start_at = @ScheduledStartAt,
                     updated_by = @UserId,
                     updated_at = @Now
@@ -399,6 +774,8 @@ public static class AdminEndpoints
                 req.Description,
                 req.DriverId,
                 req.VehicleId,
+                req.CompanionId,
+                req.Companions,
                 ExplicitStatus = req.Status,
                 req.CancellationReason,
                 Status = status,
@@ -407,8 +784,7 @@ public static class AdminEndpoints
                 req.PickupLng,
                 req.ContactName,
                 req.ContactPhone,
-                req.Companions,
-                req.ScheduledStartAt,
+                ScheduledStartAt = scheduledStartAtUtc,
                 UserId = user.UserId,
                 Now = DateTime.UtcNow
             }, cancellationToken: ct));
@@ -457,9 +833,12 @@ public static class AdminEndpoints
             if (oldJob.companions != req.Companions) changes.Add($"ผู้ติดตาม: '{oldJob.companions}' -> '{req.Companions}'");
 
             var oldScheduled = (DateTime?)oldJob.scheduledStartAt;
-            if (oldScheduled != req.ScheduledStartAt)
+            if (oldScheduled != scheduledStartAtUtc)
             {
-                changes.Add($"เวลานัดหมาย: '{oldScheduled?.ToString("yyyy-MM-dd HH:mm") ?? "-"}' -> '{req.ScheduledStartAt?.ToString("yyyy-MM-dd HH:mm") ?? "-"}'");
+                var bangkokZone = TimeZoneInfo.FindSystemTimeZoneById(OperatingSystem.IsWindows() ? "SE Asia Standard Time" : "Asia/Bangkok");
+                var oldDisplay = oldScheduled.HasValue ? TimeZoneInfo.ConvertTimeFromUtc(oldScheduled.Value, bangkokZone).ToString("yyyy-MM-dd HH:mm") : "-";
+                var newDisplay = scheduledStartAtUtc.HasValue ? TimeZoneInfo.ConvertTimeFromUtc(scheduledStartAtUtc.Value, bangkokZone).ToString("yyyy-MM-dd HH:mm") : "-";
+                changes.Add($"เวลานัดหมาย: '{oldDisplay}' -> '{newDisplay}'");
             }
 
             var diffText = changes.Count > 0 ? string.Join(", ", changes) : "ไม่มีการเปลี่ยนแปลงฟิลด์หลัก";
@@ -474,31 +853,68 @@ public static class AdminEndpoints
             if (isCancelled)
             {
                 var targetDriverId = req.DriverId ?? (oldJob.driverId != null ? (long?)Convert.ToInt64(oldJob.driverId) : null);
+                var reason = !string.IsNullOrWhiteSpace(req.CancellationReason) ? req.CancellationReason : "ผู้ดูแลระบบยกเลิกงาน";
                 if (targetDriverId.HasValue)
                 {
-                    var reason = !string.IsNullOrWhiteSpace(req.CancellationReason) ? req.CancellationReason : "ผู้ดูแลระบบยกเลิกงาน";
                     _ = pushNotificationService.SendJobCancelledNotificationAsync(targetDriverId.Value, id, currentJobNumber, req.Title ?? (string)oldJob.title, reason, ct);
                 }
-            }
-            else if (isReassigned || isUnassigned)
-            {
-                if (previousDriverId.HasValue)
+                var targetCompanionId = req.CompanionId ?? (oldJob.companionId != null ? (long?)Convert.ToInt64(oldJob.companionId) : null);
+                if (targetCompanionId.HasValue && targetCompanionId.Value != targetDriverId)
                 {
-                    _ = pushNotificationService.SendJobCancelledNotificationAsync(previousDriverId.Value, id, currentJobNumber, (string)oldJob.title, "งานถูกเปลี่ยนผู้ขับขี่หรือยกเลิกการมอบหมาย", ct);
+                    _ = pushNotificationService.SendJobCancelledNotificationAsync(targetCompanionId.Value, id, currentJobNumber, req.Title ?? (string)oldJob.title, reason, ct);
                 }
-                if (req.DriverId.HasValue)
+            }
+            else
+            {
+                // Driver Notifications
+                if (isReassigned || isUnassigned)
+                {
+                    if (previousDriverId.HasValue)
+                    {
+                        _ = pushNotificationService.SendJobCancelledNotificationAsync(previousDriverId.Value, id, currentJobNumber, (string)oldJob.title, "งานถูกเปลี่ยนผู้ขับขี่หรือยกเลิกการมอบหมาย", ct);
+                    }
+                    if (req.DriverId.HasValue)
+                    {
+                        _ = pushNotificationService.SendJobAssignedNotificationAsync(req.DriverId.Value, id, currentJobNumber, req.Title, req.PickupLocation, ct);
+                    }
+                }
+                else if (req.DriverId.HasValue && (previousDriverId != req.DriverId || oldJob.status == "Pending"))
                 {
                     _ = pushNotificationService.SendJobAssignedNotificationAsync(req.DriverId.Value, id, currentJobNumber, req.Title, req.PickupLocation, ct);
                 }
-            }
-            else if (req.DriverId.HasValue && (previousDriverId != req.DriverId || oldJob.status == "Pending"))
-            {
-                _ = pushNotificationService.SendJobAssignedNotificationAsync(req.DriverId.Value, id, currentJobNumber, req.Title, req.PickupLocation, ct);
-            }
-            else if (req.DriverId.HasValue && changes.Count > 0)
-            {
-                // Send Job Updated Push Notification to the assigned driver
-                _ = pushNotificationService.SendJobUpdatedNotificationAsync(req.DriverId.Value, id, currentJobNumber, req.Title ?? (string)oldJob.title, req.PickupLocation, diffText, ct);
+                else if (req.DriverId.HasValue && changes.Count > 0)
+                {
+                    _ = pushNotificationService.SendJobUpdatedNotificationAsync(req.DriverId.Value, id, currentJobNumber, req.Title ?? (string)oldJob.title, req.PickupLocation, diffText, ct);
+                }
+
+                // Companion Notifications
+                var isCompanionReassigned = (previousCompanionId.HasValue && req.CompanionId.HasValue && previousCompanionId.Value != req.CompanionId.Value);
+                var isCompanionUnassigned = (previousCompanionId.HasValue && !req.CompanionId.HasValue);
+                if (isCompanionReassigned || isCompanionUnassigned)
+                {
+                    if (previousCompanionId.HasValue && (!req.DriverId.HasValue || previousCompanionId.Value != req.DriverId.Value))
+                    {
+                        _ = pushNotificationService.SendJobCancelledNotificationAsync(previousCompanionId.Value, id, currentJobNumber, (string)oldJob.title, "งานถูกเปลี่ยนผู้ร่วมเดินทางหรือยกเลิกการมอบหมาย", ct);
+                    }
+                    if (req.CompanionId.HasValue && (!req.DriverId.HasValue || req.CompanionId.Value != req.DriverId.Value))
+                    {
+                        _ = pushNotificationService.SendJobAssignedNotificationAsync(req.CompanionId.Value, id, currentJobNumber, req.Title, req.PickupLocation, ct);
+                    }
+                }
+                else if (req.CompanionId.HasValue && (previousCompanionId != req.CompanionId || oldJob.status == "Pending"))
+                {
+                    if (!req.DriverId.HasValue || req.CompanionId.Value != req.DriverId.Value)
+                    {
+                        _ = pushNotificationService.SendJobAssignedNotificationAsync(req.CompanionId.Value, id, currentJobNumber, req.Title, req.PickupLocation, ct);
+                    }
+                }
+                else if (req.CompanionId.HasValue && changes.Count > 0)
+                {
+                    if (!req.DriverId.HasValue || req.CompanionId.Value != req.DriverId.Value)
+                    {
+                        _ = pushNotificationService.SendJobUpdatedNotificationAsync(req.CompanionId.Value, id, currentJobNumber, req.Title ?? (string)oldJob.title, req.PickupLocation, diffText, ct);
+                    }
+                }
             }
 
             List<string>? warnings = null;
@@ -522,7 +938,7 @@ public static class AdminEndpoints
         {
             using var conn = db.CreateConnection();
             var jobInfo = await conn.QueryFirstOrDefaultAsync(@"
-                SELECT driver_id AS ""driverId"", job_number AS ""jobNumber"", title, status 
+                SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", job_number AS ""jobNumber"", title, status 
                 FROM jobs 
                 WHERE id = @id AND deleted_at IS NULL;", new { id });
             if (jobInfo == null) return Results.NotFound(ApiResponse<string>.Fail("Job not found"));
@@ -534,13 +950,24 @@ public static class AdminEndpoints
             var affected = await conn.ExecuteAsync(new CommandDefinition(sql, new { id, UserId = user.UserId, Now = DateTime.UtcNow }, cancellationToken: ct));
             if (affected == 0) return Results.NotFound(ApiResponse<string>.Fail("Job not found"));
 
-            // Notify driver if active job was deleted
-            if (jobInfo.driverId != null && jobInfo.status != "Completed" && jobInfo.status != "Cancelled")
+            // Notify driver and companion if active job was deleted
+            if (jobInfo.status != "Completed" && jobInfo.status != "Cancelled")
             {
-                long driverId = Convert.ToInt64(jobInfo.driverId);
                 string jobNum = (string)jobInfo.jobNumber ?? id.ToString();
                 string title = (string)jobInfo.title ?? "";
-                _ = pushNotificationService.SendJobCancelledNotificationAsync(driverId, id, jobNum, title, "งานถูกลบออกจากระบบโดยผู้ดูแลระบบ", ct);
+                if (jobInfo.driverId != null)
+                {
+                    long driverId = Convert.ToInt64(jobInfo.driverId);
+                    _ = pushNotificationService.SendJobCancelledNotificationAsync(driverId, id, jobNum, title, "งานถูกลบออกจากระบบโดยผู้ดูแลระบบ", ct);
+                }
+                if (jobInfo.companionId != null)
+                {
+                    long companionId = Convert.ToInt64(jobInfo.companionId);
+                    if (jobInfo.driverId == null || companionId != Convert.ToInt64(jobInfo.driverId))
+                    {
+                        _ = pushNotificationService.SendJobCancelledNotificationAsync(companionId, id, jobNum, title, "งานถูกลบออกจากระบบโดยผู้ดูแลระบบ", ct);
+                    }
+                }
             }
 
             var targetJobNumber = (string)jobInfo.jobNumber ?? id.ToString();
@@ -556,21 +983,29 @@ public static class AdminEndpoints
         {
             using var conn = db.CreateConnection();
             var activeJobs = (await conn.QueryAsync(@"
-                SELECT driver_id AS ""driverId"", id, job_number AS ""jobNumber"", title 
+                SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", id, job_number AS ""jobNumber"", title 
                 FROM jobs 
-                WHERE deleted_at IS NULL AND driver_id IS NOT NULL AND status NOT IN ('Completed', 'Cancelled');")).ToList();
+                WHERE deleted_at IS NULL AND (driver_id IS NOT NULL OR companion_id IS NOT NULL) AND status NOT IN ('Completed', 'Cancelled');")).ToList();
 
             var sql = "UPDATE jobs SET deleted_at = @Now, deleted_by = @UserId WHERE deleted_at IS NULL;";
             var count = await conn.ExecuteAsync(new CommandDefinition(sql, new { UserId = user.UserId, Now = DateTime.UtcNow }, cancellationToken: ct));
 
             foreach (var j in activeJobs)
             {
+                string jobNum = (string)j.jobNumber ?? j.id.ToString();
+                string title = (string)j.title ?? "";
                 if (j.driverId != null)
                 {
                     long driverId = Convert.ToInt64(j.driverId);
-                    string jobNum = (string)j.jobNumber ?? j.id.ToString();
-                    string title = (string)j.title ?? "";
                     _ = pushNotificationService.SendJobCancelledNotificationAsync(driverId, (long)j.id, jobNum, title, "งานทั้งหมดถูกลบออกจากระบบโดยผู้ดูแลระบบ", ct);
+                }
+                if (j.companionId != null)
+                {
+                    long companionId = Convert.ToInt64(j.companionId);
+                    if (j.driverId == null || companionId != Convert.ToInt64(j.driverId))
+                    {
+                        _ = pushNotificationService.SendJobCancelledNotificationAsync(companionId, (long)j.id, jobNum, title, "งานทั้งหมดถูกลบออกจากระบบโดยผู้ดูแลระบบ", ct);
+                    }
                 }
             }
 
@@ -783,8 +1218,12 @@ public static class AdminEndpoints
             var userRepo = new UserRepository(db);
             var profileRepo = new UserProfileRepository(db);
 
+            var username = (req.Username ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(username))
+                return Results.BadRequest(ApiResponse<string>.Fail("กรุณาระบุชื่อผู้ใช้งาน (Username)"));
+
             // 1. ตรวจสอบ ชื่อผู้ใช้งาน (Username) ซ้ำ
-            var existingUser = await userRepo.GetByUsernameAsync(req.Username, ct);
+            var existingUser = await userRepo.GetByUsernameAsync(username, ct);
             if (existingUser != null)
                 return Results.BadRequest(ApiResponse<string>.Fail("ชื่อผู้ใช้งาน (Username) นี้มีอยู่ในระบบแล้ว"));
 
@@ -844,11 +1283,22 @@ public static class AdminEndpoints
                     if (checkEmail > 0)
                         return Results.BadRequest(ApiResponse<string>.Fail("อีเมลนี้มีอยู่ในระบบแล้ว"));
                 }
+
+                // 6. ตรวจสอบ เลขที่ใบขับขี่ (License No) ซ้ำ (สำหรับ Driver)
+                if (req.Role == "Driver" && !string.IsNullOrWhiteSpace(d.LicenseNo) && d.LicenseNo.Trim() != "N/A")
+                {
+                    var licenseNo = d.LicenseNo.Trim();
+                    var checkLicense = await conn.ExecuteScalarAsync<int>(
+                        "SELECT COUNT(1) FROM user_profiles WHERE license_no = @LicenseNo AND deleted_at IS NULL;",
+                        new { LicenseNo = licenseNo });
+                    if (checkLicense > 0)
+                        return Results.BadRequest(ApiResponse<string>.Fail("เลขที่ใบขับขี่นี้มีอยู่ในระบบแล้ว"));
+                }
             }
 
             var user = new User
             {
-                Username = req.Username,
+                Username = username,
                 PasswordHash = PasswordHasher.HashPassword(req.Password),
                 Role = req.Role,
                 IsActive = true,
@@ -883,9 +1333,9 @@ public static class AdminEndpoints
                 await profileRepo.CreateUserProfileAsync(profile, ct);
             }
 
-            await auditRepo.LogAsync(currentUser.UserId, "CREATE", "users", userId.ToString(), $"เพิ่มผู้ใช้งานใหม่ Username: {req.Username} Role: {req.Role}", ct: ct);
+            await auditRepo.LogAsync(currentUser.UserId, "CREATE", "users", userId.ToString(), $"เพิ่มผู้ใช้งานใหม่ Username: {username} Role: {req.Role}", ct: ct);
 
-            return Results.Ok(ApiResponse<CreatedUserResponseDto>.Ok(new CreatedUserResponseDto(userId, req.Username, req.Role), "User created successfully"));
+            return Results.Ok(ApiResponse<CreatedUserResponseDto>.Ok(new CreatedUserResponseDto(userId, username, req.Role), "User created successfully"));
         })
         .Produces<ApiResponse<CreatedUserResponseDto>>(StatusCodes.Status200OK)
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
@@ -940,6 +1390,31 @@ public static class AdminEndpoints
                 var d = req.DriverDetail;
                 var isAdmin = req.Role == "Admin";
 
+                // 1. ตรวจสอบ รหัสพนักงาน (Employee Code) ซ้ำ
+                if (!string.IsNullOrWhiteSpace(d.EmployeeCode))
+                {
+                    var checkEmpCode = await conn.ExecuteScalarAsync<int>(
+                        "SELECT COUNT(1) FROM user_profiles WHERE employee_code = @Code AND user_id != @userId AND deleted_at IS NULL;",
+                        new { Code = d.EmployeeCode.Trim(), userId });
+                    if (checkEmpCode > 0)
+                        return Results.BadRequest(ApiResponse<string>.Fail("รหัสพนักงานนี้มีอยู่ในระบบแล้ว"));
+                }
+
+                // 2. ตรวจสอบ เลขบัตรประชาชน (IdCardNo) ซ้ำ
+                if (!string.IsNullOrWhiteSpace(d.IdCardNo))
+                {
+                    var idCardNo = d.IdCardNo.Trim();
+                    if (idCardNo.Length != 13 || !idCardNo.All(char.IsDigit))
+                        return Results.BadRequest(ApiResponse<string>.Fail("เลขบัตรประชาชนต้องเป็นตัวเลข 13 หลัก"));
+
+                    var checkIdCard = await conn.ExecuteScalarAsync<int>(
+                        "SELECT COUNT(1) FROM user_profiles WHERE id_card_no = @IdCardNo AND user_id != @userId AND deleted_at IS NULL;",
+                        new { IdCardNo = idCardNo, userId });
+                    if (checkIdCard > 0)
+                        return Results.BadRequest(ApiResponse<string>.Fail("เลขบัตรประชาชนนี้มีอยู่ในระบบแล้ว"));
+                }
+
+                // 3. ตรวจสอบ เบอร์โทรศัพท์ (Phone) ซ้ำ
                 if (!string.IsNullOrWhiteSpace(d.Phone))
                 {
                     var phone = d.Phone.Trim();
@@ -953,6 +1428,7 @@ public static class AdminEndpoints
                         return Results.BadRequest(ApiResponse<string>.Fail("เบอร์โทรศัพท์นี้มีอยู่ในระบบแล้ว"));
                 }
 
+                // 4. ตรวจสอบ อีเมล (Email) ซ้ำ
                 if (!string.IsNullOrWhiteSpace(d.Email))
                 {
                     var email = d.Email.Trim();
@@ -965,6 +1441,17 @@ public static class AdminEndpoints
                         new { Email = email, userId });
                     if (checkEmail > 0)
                         return Results.BadRequest(ApiResponse<string>.Fail("อีเมลนี้มีอยู่ในระบบแล้ว"));
+                }
+
+                // 5. ตรวจสอบ เลขที่ใบขับขี่ (LicenseNo) ซ้ำ (สำหรับ Driver)
+                if (req.Role == "Driver" && !string.IsNullOrWhiteSpace(d.LicenseNo) && d.LicenseNo.Trim() != "N/A")
+                {
+                    var licenseNo = d.LicenseNo.Trim();
+                    var checkLicense = await conn.ExecuteScalarAsync<int>(
+                        "SELECT COUNT(1) FROM user_profiles WHERE license_no = @LicenseNo AND user_id != @userId AND deleted_at IS NULL;",
+                        new { LicenseNo = licenseNo, userId });
+                    if (checkLicense > 0)
+                        return Results.BadRequest(ApiResponse<string>.Fail("เลขที่ใบขับขี่นี้มีอยู่ในระบบแล้ว"));
                 }
 
                 var hasProfile = await conn.ExecuteScalarAsync<int>(
@@ -1125,6 +1612,49 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("ลบผู้ใช้งาน (Delete User)");
+
+        group.MapPost("/users/{userId:long}/reset-password", async (long userId, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        {
+            using var conn = db.CreateConnection();
+            var userSql = @"
+                SELECT u.id, u.username, u.role,
+                       TO_CHAR(p.birth_date, 'YYYY-MM-DD') AS ""birthDate"",
+                       COALESCE(NULLIF(TRIM(p.first_name || ' ' || p.last_name), ''), u.username) AS name
+                FROM users u
+                LEFT JOIN user_profiles p ON p.user_id = u.id AND p.deleted_at IS NULL
+                WHERE u.id = @userId AND u.deleted_at IS NULL;";
+            var userInfo = await conn.QueryFirstOrDefaultAsync(new CommandDefinition(userSql, new { userId }, cancellationToken: ct));
+            if (userInfo == null) return Results.NotFound(ApiResponse<string>.Fail("ไม่พบผู้ใช้งานนี้"));
+
+            string defaultPassword = "password123";
+            var birthDateStr = (string?)userInfo.birthDate;
+            if (!string.IsNullOrWhiteSpace(birthDateStr))
+            {
+                var parts = birthDateStr.Split('-');
+                if (parts.Length == 3 && int.TryParse(parts[0], out var yyyy) && int.TryParse(parts[1], out var mm) && int.TryParse(parts[2], out var dd))
+                {
+                    defaultPassword = $"{dd:00}{mm:00}{yyyy + 543}";
+                }
+            }
+
+            var hash = PasswordHasher.HashPassword(defaultPassword);
+            var updateSql = @"
+                UPDATE users
+                SET password_hash = @hash,
+                    updated_at = @Now,
+                    updated_by = @UpdatedBy
+                WHERE id = @userId AND deleted_at IS NULL;";
+            await conn.ExecuteAsync(new CommandDefinition(updateSql, new { hash, Now = DateTime.UtcNow, UpdatedBy = currentUser.UserId, userId }, cancellationToken: ct));
+
+            var userName = (string)userInfo.name;
+            var username = (string)userInfo.username;
+            await auditRepo.LogAsync(currentUser.UserId, "UPDATE", "users", userId.ToString(), $"รีเซ็ตรหัสผ่านผู้ใช้งาน: {userName} (Username: {username}) เป็นวันเดือนปีเกิด ({defaultPassword})", ct: ct);
+
+            return Results.Ok(ApiResponse<object>.Ok(new { defaultPassword }, $"รีเซ็ตรหัสผ่านเป็น '{defaultPassword}' เรียบร้อยแล้ว"));
+        })
+        .Produces<ApiResponse<object>>(StatusCodes.Status200OK)
+        .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
+        .WithSummary("รีเซ็ตรหัสผ่านผู้ใช้งานเป็นวันเดือนปีเกิด (Reset User Password)");
 
         // Vehicles Endpoints
         group.MapGet("/vehicles", async ([FromQuery] string? search, DbConnectionFactory db, CancellationToken ct) =>
@@ -1322,7 +1852,7 @@ public static class AdminEndpoints
             var totalJobsToday = await conn.ExecuteScalarAsync<int>(@"
                 SELECT COUNT(1) FROM jobs 
                 WHERE deleted_at IS NULL 
-                  AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date;");
+                  AND (COALESCE(scheduled_start_at, created_at) AT TIME ZONE 'Asia/Bangkok')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date;");
 
             var pendingJobs = await conn.ExecuteScalarAsync<int>(@"
                 SELECT COUNT(1) FROM jobs 
@@ -1349,20 +1879,20 @@ public static class AdminEndpoints
                       WHERE j.driver_id = u.id AND j.status IN ('Assigned', 'Started', 'Arrived', 'In Progress') AND j.deleted_at IS NULL
                   );");
 
-            // Hourly Statistics Today
+            // Hourly Statistics Today (All 24 hours: 00:00 to 23:00)
             var hourlyStatsSql = @"
                 SELECT TO_CHAR(h.time_slot, 'HH24:00') AS time,
                        COUNT(CASE WHEN j.status = 'Completed' THEN 1 END)::int AS completed,
-                       COUNT(CASE WHEN j.status IN ('Assigned', 'Started', 'Arrived', 'In Progress') THEN 1 END)::int AS inprogress,
+                       COUNT(CASE WHEN j.status IN ('Pending', 'Assigned', 'Started', 'Arrived', 'In Progress') THEN 1 END)::int AS inprogress,
                        COUNT(CASE WHEN j.status = 'Cancelled' THEN 1 END)::int AS cancelled
                 FROM generate_series(
-                    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date + INTERVAL '8 hours',
-                    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date + INTERVAL '20 hours',
-                    INTERVAL '2 hours'
+                    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date,
+                    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date + INTERVAL '23 hours',
+                    INTERVAL '1 hour'
                 ) h(time_slot)
                 LEFT JOIN jobs j ON j.deleted_at IS NULL 
-                  AND (j.created_at AT TIME ZONE 'Asia/Bangkok') >= h.time_slot 
-                  AND (j.created_at AT TIME ZONE 'Asia/Bangkok') < h.time_slot + INTERVAL '2 hours'
+                  AND (COALESCE(j.scheduled_start_at, j.created_at) AT TIME ZONE 'Asia/Bangkok') >= h.time_slot 
+                  AND (COALESCE(j.scheduled_start_at, j.created_at) AT TIME ZONE 'Asia/Bangkok') < h.time_slot + INTERVAL '1 hour'
                 GROUP BY h.time_slot
                 ORDER BY h.time_slot ASC;";
 
@@ -1372,7 +1902,7 @@ public static class AdminEndpoints
             var monthlyStatsSql = @"
                 SELECT TO_CHAR(d.day_slot, 'DD/MM') AS time,
                        COUNT(CASE WHEN j.status = 'Completed' THEN 1 END)::int AS completed,
-                       COUNT(CASE WHEN j.status IN ('Assigned', 'Started', 'Arrived', 'In Progress', 'Pending') THEN 1 END)::int AS inprogress,
+                       COUNT(CASE WHEN j.status IN ('Pending', 'Assigned', 'Started', 'Arrived', 'In Progress') THEN 1 END)::int AS inprogress,
                        COUNT(CASE WHEN j.status = 'Cancelled' THEN 1 END)::int AS cancelled
                 FROM generate_series(
                     DATE_TRUNC('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok'),
@@ -1380,7 +1910,7 @@ public static class AdminEndpoints
                     INTERVAL '1 day'
                 ) d(day_slot)
                 LEFT JOIN jobs j ON j.deleted_at IS NULL 
-                  AND (j.created_at AT TIME ZONE 'Asia/Bangkok')::date = d.day_slot::date
+                  AND (COALESCE(j.scheduled_start_at, j.created_at) AT TIME ZONE 'Asia/Bangkok')::date = d.day_slot::date
                 GROUP BY d.day_slot
                 ORDER BY d.day_slot ASC;";
 
@@ -1390,7 +1920,7 @@ public static class AdminEndpoints
             var yearlyStatsSql = @"
                 SELECT TO_CHAR(m.month_slot, 'Mon') AS time,
                        COUNT(CASE WHEN j.status = 'Completed' THEN 1 END)::int AS completed,
-                       COUNT(CASE WHEN j.status IN ('Assigned', 'Started', 'Arrived', 'In Progress', 'Pending') THEN 1 END)::int AS inprogress,
+                       COUNT(CASE WHEN j.status IN ('Pending', 'Assigned', 'Started', 'Arrived', 'In Progress') THEN 1 END)::int AS inprogress,
                        COUNT(CASE WHEN j.status = 'Cancelled' THEN 1 END)::int AS cancelled
                 FROM generate_series(
                     DATE_TRUNC('year', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok'),
@@ -1398,7 +1928,7 @@ public static class AdminEndpoints
                     INTERVAL '1 month'
                 ) m(month_slot)
                 LEFT JOIN jobs j ON j.deleted_at IS NULL 
-                  AND DATE_TRUNC('month', j.created_at AT TIME ZONE 'Asia/Bangkok') = m.month_slot
+                  AND DATE_TRUNC('month', COALESCE(j.scheduled_start_at, j.created_at) AT TIME ZONE 'Asia/Bangkok') = m.month_slot
                 GROUP BY m.month_slot
                 ORDER BY m.month_slot ASC;";
 
@@ -1407,12 +1937,12 @@ public static class AdminEndpoints
             var totalJobsThisMonth = await conn.ExecuteScalarAsync<int>(@"
                 SELECT COUNT(1) FROM jobs 
                 WHERE deleted_at IS NULL 
-                  AND DATE_TRUNC('month', created_at AT TIME ZONE 'Asia/Bangkok') = DATE_TRUNC('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok');");
+                  AND DATE_TRUNC('month', COALESCE(scheduled_start_at, created_at) AT TIME ZONE 'Asia/Bangkok') = DATE_TRUNC('month', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok');");
 
             var totalJobsThisYear = await conn.ExecuteScalarAsync<int>(@"
                 SELECT COUNT(1) FROM jobs 
                 WHERE deleted_at IS NULL 
-                  AND DATE_TRUNC('year', created_at AT TIME ZONE 'Asia/Bangkok') = DATE_TRUNC('year', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok');");
+                  AND DATE_TRUNC('year', COALESCE(scheduled_start_at, created_at) AT TIME ZONE 'Asia/Bangkok') = DATE_TRUNC('year', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok');");
 
             var dashboardDto = new DashboardSummaryResponseDto(
                 TotalJobsToday: totalJobsToday,

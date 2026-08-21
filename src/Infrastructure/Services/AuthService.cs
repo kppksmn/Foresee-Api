@@ -26,7 +26,8 @@ public class AuthService
 
     public async Task<(AuthResponseDto? Dto, string? ErrorCode, string Message)> AuthenticateAsync(string username, string password, int channel = 1, CancellationToken ct = default)
     {
-        var user = await _userRepo.GetByUsernameAsync(username, ct);
+        var cleanUsername = (username ?? "").Trim().ToLowerInvariant();
+        var user = await _userRepo.GetByUsernameAsync(cleanUsername, ct);
         if (user == null || !user.IsActive)
         {
             return (null, "INVALID_CREDENTIALS", "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
@@ -59,23 +60,55 @@ public class AuthService
             return (null, "INVALID_CHANNEL", "ช่องทางการเข้าสู่ระบบไม่ถูกต้อง (Channel 1: Admin Dashboard, Channel 2: Mobile)");
         }
 
-        var token = GenerateJwtToken(user);
+        var sessionId = Guid.NewGuid().ToString("N");
+        var token = GenerateJwtToken(user, sessionId, channel);
         var refreshToken = Guid.NewGuid().ToString("N");
         var tokenHash = PasswordHasher.HashPassword(refreshToken);
         var refreshExpDays = double.Parse(_config["Jwt:RefreshTokenExpirationDays"] ?? "30");
 
         using (var conn = _db.CreateConnection())
         {
-            await Dapper.SqlMapper.ExecuteAsync(conn, @"
-                UPDATE users
-                SET last_login_at = CURRENT_TIMESTAMP
-                WHERE id = @UserId;",
-                new { UserId = user.Id });
+            // Kick out previous sessions on the same channel:
+            // Channel 1 = Web, Channel 2 = Mobile (Admin can be logged into Web & Mobile simultaneously)
+            if (channel == 1)
+            {
+                user.ActiveWebTokenId = sessionId;
+                await Dapper.SqlMapper.ExecuteAsync(conn, @"
+                    UPDATE users
+                    SET active_web_token_id = @SessionId,
+                        active_token_id = @SessionId,
+                        last_login_at = CURRENT_TIMESTAMP
+                    WHERE id = @UserId;",
+                    new { SessionId = sessionId, UserId = user.Id });
+
+                await Dapper.SqlMapper.ExecuteAsync(conn, @"
+                    UPDATE refresh_tokens
+                    SET revoked_at = CURRENT_TIMESTAMP
+                    WHERE user_id = @UserId AND channel = 1 AND revoked_at IS NULL;",
+                    new { UserId = user.Id });
+            }
+            else
+            {
+                user.ActiveMobileTokenId = sessionId;
+                await Dapper.SqlMapper.ExecuteAsync(conn, @"
+                    UPDATE users
+                    SET active_mobile_token_id = @SessionId,
+                        active_token_id = @SessionId,
+                        last_login_at = CURRENT_TIMESTAMP
+                    WHERE id = @UserId;",
+                    new { SessionId = sessionId, UserId = user.Id });
+
+                await Dapper.SqlMapper.ExecuteAsync(conn, @"
+                    UPDATE refresh_tokens
+                    SET revoked_at = CURRENT_TIMESTAMP
+                    WHERE user_id = @UserId AND channel = 2 AND revoked_at IS NULL;",
+                    new { UserId = user.Id });
+            }
 
             await Dapper.SqlMapper.ExecuteAsync(conn, @"
-                INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at)
-                VALUES (@UserId, @TokenHash, @ExpiresAt, CURRENT_TIMESTAMP);",
-                new { UserId = user.Id, TokenHash = tokenHash, ExpiresAt = DateTime.UtcNow.AddDays(refreshExpDays) });
+                INSERT INTO refresh_tokens (user_id, token_hash, channel, expires_at, created_at)
+                VALUES (@UserId, @TokenHash, @Channel, @ExpiresAt, CURRENT_TIMESTAMP);",
+                new { UserId = user.Id, TokenHash = tokenHash, Channel = channel, ExpiresAt = DateTime.UtcNow.AddDays(refreshExpDays) });
         }
 
         var dto = new AuthResponseDto(
@@ -99,7 +132,9 @@ public class AuthService
         using var conn = _db.CreateConnection();
         var tokenHash = PasswordHasher.HashPassword(refreshToken);
         var record = await Dapper.SqlMapper.QueryFirstOrDefaultAsync(conn, @"
-            SELECT r.id, r.user_id AS UserId, r.expires_at AS ExpiresAt, r.revoked_at AS RevokedAt, u.username, u.role, u.is_active AS IsActive
+            SELECT r.id, r.user_id AS UserId, r.channel AS Channel, r.expires_at AS ExpiresAt, r.revoked_at AS RevokedAt, 
+                   u.username, u.role, u.is_active AS IsActive, u.active_token_id AS ActiveTokenId,
+                   u.active_web_token_id AS ActiveWebTokenId, u.active_mobile_token_id AS ActiveMobileTokenId
             FROM refresh_tokens r
             JOIN users u ON u.id = r.user_id
             WHERE r.token_hash = @tokenHash AND r.revoked_at IS NULL AND u.deleted_at IS NULL;",
@@ -110,6 +145,8 @@ public class AuthService
             return (null, "INVALID_REFRESH_TOKEN", "Refresh token ไม่ถูกต้องหรือหมดอายุแล้ว");
         }
 
+        int channel = record.channel != null ? (int)record.channel : 1;
+        var newSessionId = Guid.NewGuid().ToString("N");
         var user = new User
         {
             Id = (long)record.userid,
@@ -118,16 +155,37 @@ public class AuthService
             IsActive = (bool)record.isactive
         };
 
-        var newJwt = GenerateJwtToken(user);
+        if (channel == 1)
+        {
+            user.ActiveWebTokenId = newSessionId;
+            await Dapper.SqlMapper.ExecuteAsync(conn, @"
+                UPDATE users
+                SET active_web_token_id = @newSessionId,
+                    active_token_id = @newSessionId
+                WHERE id = @UserId;",
+                new { newSessionId, UserId = user.Id });
+        }
+        else
+        {
+            user.ActiveMobileTokenId = newSessionId;
+            await Dapper.SqlMapper.ExecuteAsync(conn, @"
+                UPDATE users
+                SET active_mobile_token_id = @newSessionId,
+                    active_token_id = @newSessionId
+                WHERE id = @UserId;",
+                new { newSessionId, UserId = user.Id });
+        }
+
+        var newJwt = GenerateJwtToken(user, newSessionId, channel);
         var newRefreshToken = Guid.NewGuid().ToString("N");
         var newHash = PasswordHasher.HashPassword(newRefreshToken);
         var refreshExpDays = double.Parse(_config["Jwt:RefreshTokenExpirationDays"] ?? "30");
 
         var newRecordId = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn, @"
-            INSERT INTO refresh_tokens (user_id, token_hash, expires_at, created_at)
-            VALUES (@UserId, @TokenHash, @ExpiresAt, CURRENT_TIMESTAMP)
+            INSERT INTO refresh_tokens (user_id, token_hash, channel, expires_at, created_at)
+            VALUES (@UserId, @TokenHash, @Channel, @ExpiresAt, CURRENT_TIMESTAMP)
             RETURNING id;",
-            new { UserId = user.Id, TokenHash = newHash, ExpiresAt = DateTime.UtcNow.AddDays(refreshExpDays) });
+            new { UserId = user.Id, TokenHash = newHash, Channel = channel, ExpiresAt = DateTime.UtcNow.AddDays(refreshExpDays) });
 
         await Dapper.SqlMapper.ExecuteAsync(conn, @"
             UPDATE refresh_tokens
@@ -454,16 +512,22 @@ public class AuthService
         }
     }
 
-    private string GenerateJwtToken(User user)
+    private string GenerateJwtToken(User user, string? sessionId = null, int channel = 1)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"] ?? "super_secret_key_that_is_long_enough_123456"));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        var sid = sessionId 
+            ?? (channel == 1 ? user.ActiveWebTokenId : user.ActiveMobileTokenId)
+            ?? user.ActiveTokenId 
+            ?? Guid.NewGuid().ToString("N");
 
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new Claim(ClaimTypes.Role, user.Role),
-            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new Claim("sid", sid),
+            new Claim("chn", channel.ToString())
         };
 
         var expiresMinutes = double.Parse(_config["Jwt:AccessTokenExpirationMinutes"] ?? "30");

@@ -8,6 +8,9 @@ public class User
     public string Role { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
     public DateTime? LastLoginAt { get; set; }
+    public string? ActiveTokenId { get; set; }
+    public string? ActiveWebTokenId { get; set; }
+    public string? ActiveMobileTokenId { get; set; }
     public long? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public long? UpdatedBy { get; set; }
@@ -71,6 +74,7 @@ public class Job
     public string? ContactName { get; set; }
     public string? ContactPhone { get; set; }
     public string? Companions { get; set; }
+    public long? CompanionId { get; set; }
     public DateTime? ScheduledStartAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? ArrivedAt { get; set; }

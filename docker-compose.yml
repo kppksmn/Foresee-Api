@@ -1,17 +1,35 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: foresee-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: foresee
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   foresee-api:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: foresee-api
+    restart: always
     ports:
       - "5000:8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
-      - ConnectionStrings__PostgreSQL=Host=host.docker.internal;Port=5432;Database=foresee;Username=postgres;Password=postgres123
+      - ConnectionStrings__PostgreSQL=Host=postgres;Port=5432;Database=foresee;Username=postgres;Password=postgres123
       - Jwt__Issuer=ForeseeAPI
       - Jwt__Audience=ForeseeClients
       - Jwt__Key=super_secret_key_that_is_long_enough_123456_driver_work_management_key
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:

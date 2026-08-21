@@ -87,6 +87,8 @@ public class JobDto
     public string? ContactName { get; set; }
     public string? ContactPhone { get; set; }
     public string? Companions { get; set; }
+    public long? CompanionId { get; set; }
+    public string? CompanionName { get; set; }
     public DateTime? ScheduledStartAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? ArrivedAt { get; set; }
@@ -108,7 +110,8 @@ public record CreateJobDto(
     string? ContactName,
     string? ContactPhone,
     string? Companions,
-    DateTime? ScheduledStartAt
+    DateTime? ScheduledStartAt,
+    long? CompanionId = null
 );
 
 public record UpdateJobDto(
@@ -124,10 +127,11 @@ public record UpdateJobDto(
     string? ContactName,
     string? ContactPhone,
     string? Companions,
-    DateTime? ScheduledStartAt
+    DateTime? ScheduledStartAt,
+    long? CompanionId = null
 );
 
-public record AssignJobDto(long DriverId, long? VehicleId);
+public record AssignJobDto(long DriverId, long? VehicleId, long? CompanionId = null);
 public record CancelJobDto(string Reason);
 
 public record UserDto(
@@ -236,6 +240,8 @@ public class AdminJobListItemDto
     public string? ContactName { get; set; }
     public string? ContactPhone { get; set; }
     public string? Companions { get; set; }
+    public long? CompanionId { get; set; }
+    public string? CompanionName { get; set; }
     public string? ScheduledDate { get; set; }
     public string? ScheduledTime { get; set; }
     public DateTime? ScheduledStartAt { get; set; }
@@ -344,6 +350,36 @@ public class JobHistoryRequestDto
 {
     public int? Offset { get; set; } = 25;
     public string? Status { get; set; }
+}
+
+public class JobListRequestDto
+{
+    public int? Offset { get; set; } = 25;
+    public int? PageSize { get; set; } = 25;
+    public string? Status { get; set; }
+    public string? Search { get; set; }
+}
+
+public class JobListResponseDto
+{
+    public IEnumerable<JobDto> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+}
+
+public class AdminJobListRequestDto
+{
+    public int? Offset { get; set; }
+    public int? Page { get; set; }
+    public int? PageSize { get; set; } = 25;
+    public string? Search { get; set; }
+    public string? Status { get; set; }
+    public string? Mode { get; set; }
+}
+
+public class AdminJobListResponseDto
+{
+    public IEnumerable<AdminJobListItemDto> Items { get; set; } = [];
+    public int TotalCount { get; set; }
 }
 
 public record ChangePasswordVerifyRequestDto(string Password);
