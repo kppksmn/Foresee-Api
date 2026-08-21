@@ -42,16 +42,17 @@ public static class MobileEndpoints
                        device_model AS DeviceModel, app_version AS AppVersion, fcm_token AS FcmToken, 
                        ip_address AS IpAddress, is_active AS IsActive
                 FROM user_devices 
-                WHERE user_id = @UserId AND device_id = @DeviceId AND deleted_at IS NULL 
+                WHERE user_id = @UserId AND deleted_at IS NULL AND is_active = TRUE
                 ORDER BY created_at DESC 
                 LIMIT 1;";
 
-            var existing = await Dapper.SqlMapper.QueryFirstOrDefaultAsync<UserDevice>(conn, new Dapper.CommandDefinition(checkSql, new { UserId = currentUser.UserId, req.DeviceId }, cancellationToken: ct));
+            var existing = await Dapper.SqlMapper.QueryFirstOrDefaultAsync<UserDevice>(conn, new Dapper.CommandDefinition(checkSql, new { UserId = currentUser.UserId }, cancellationToken: ct));
 
             if (existing != null)
             {
-                // Check if any property has changed
-                bool isChanged = (req.DeviceName != null && req.DeviceName != existing.DeviceName)
+                // Check if device_id or any property has changed
+                bool isChanged = (existing.DeviceId != req.DeviceId)
+                              || (req.DeviceName != null && req.DeviceName != existing.DeviceName)
                               || (req.DeviceModel != null && req.DeviceModel != existing.DeviceModel)
                               || (req.AppVersion != null && req.AppVersion != existing.AppVersion)
                               || (req.FcmToken != null && req.FcmToken != existing.FcmToken)
@@ -59,14 +60,14 @@ public static class MobileEndpoints
 
                 if (isChanged)
                 {
-                    // Soft-delete the old device record
-                    var deleteSql = @"
+                    // Soft-delete and deactivate ALL previous devices for this user
+                    var deactivateAllSql = @"
                         UPDATE user_devices
                         SET is_active = FALSE, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = @existingId;";
-                    await Dapper.SqlMapper.ExecuteAsync(conn, new Dapper.CommandDefinition(deleteSql, new { existingId = existing.Id }, cancellationToken: ct));
+                        WHERE user_id = @UserId AND deleted_at IS NULL;";
+                    await Dapper.SqlMapper.ExecuteAsync(conn, new Dapper.CommandDefinition(deactivateAllSql, new { UserId = currentUser.UserId }, cancellationToken: ct));
 
-                    // Insert new device row with new values
+                    // Insert new device row with new values as the only active device
                     var newDeviceName = req.DeviceName ?? existing.DeviceName;
                     var newDeviceModel = req.DeviceModel ?? existing.DeviceModel;
                     var newAppVersion = req.AppVersion ?? existing.AppVersion;
@@ -81,6 +82,13 @@ public static class MobileEndpoints
             }
             else
             {
+                // Deactivate any dangling active records for this user to guarantee single active device
+                var cleanupSql = @"
+                    UPDATE user_devices
+                    SET is_active = FALSE, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = @UserId AND deleted_at IS NULL;";
+                await Dapper.SqlMapper.ExecuteAsync(conn, new Dapper.CommandDefinition(cleanupSql, new { UserId = currentUser.UserId }, cancellationToken: ct));
+
                 var insertSql = @"
                     INSERT INTO user_devices (user_id, device_id, device_name, device_model, app_version, fcm_token, ip_address, is_active, created_at)
                     VALUES (@UserId, @DeviceId, @DeviceName, @DeviceModel, @AppVersion, @FcmToken, @IpAddress, TRUE, CURRENT_TIMESTAMP);";
