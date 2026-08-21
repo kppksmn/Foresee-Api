@@ -58,16 +58,36 @@ public class PushNotificationService
                 {
                     credential = GoogleCredential.FromJson(credJson);
                 }
-                else if (File.Exists(credPath))
-                {
-                    credential = GoogleCredential.FromFile(credPath);
-                }
                 else
                 {
-                    var envCred = Environment.GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS");
-                    if (!string.IsNullOrWhiteSpace(envCred) && File.Exists(envCred))
+                    var baseDir = AppContext.BaseDirectory;
+                    var currentDir = Directory.GetCurrentDirectory();
+                    var candidatePaths = new[]
                     {
-                        credential = GoogleCredential.FromFile(envCred);
+                        credPath,
+                        Path.Combine(baseDir, credPath),
+                        Path.Combine(baseDir, "firebase-admin.json"),
+                        Path.Combine(currentDir, credPath),
+                        Path.Combine(currentDir, "firebase-admin.json"),
+                        Path.Combine(currentDir, "src", "API", "firebase-admin.json"),
+                        Path.Combine(currentDir, "..", "src", "API", "firebase-admin.json"),
+                        Path.Combine(baseDir, "..", "..", "..", "firebase-admin.json"),
+                    };
+
+                    var resolvedPath = candidatePaths.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
+
+                    if (!string.IsNullOrWhiteSpace(resolvedPath))
+                    {
+                        _logger.LogInformation("Loading Firebase Credentials from: {ResolvedPath}", resolvedPath);
+                        credential = GoogleCredential.FromFile(resolvedPath);
+                    }
+                    else
+                    {
+                        var envCred = Environment.GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS");
+                        if (!string.IsNullOrWhiteSpace(envCred) && File.Exists(envCred))
+                        {
+                            credential = GoogleCredential.FromFile(envCred);
+                        }
                     }
                 }
 
