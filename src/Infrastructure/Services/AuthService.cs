@@ -39,23 +39,16 @@ public class AuthService
             return (null, "INVALID_CREDENTIALS", "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
         }
 
-        // Channel 1: Admin Dashboard (Web) -> Admin Only
-        if (channel == 1)
-        {
-            if (user.Role != "Admin")
-            {
-                return (null, "FORBIDDEN_ROLE", "เฉพาะผู้ดูแลระบบ (Admin) เท่านั้นที่สามารถเข้าสู่ระบบนี้ได้");
-            }
-        }
+        // Channel 1: Admin Dashboard (Web) -> Allow all active users
         // Channel 2: Mobile -> Admin & Driver
-        else if (channel == 2)
+        if (channel == 2)
         {
             if (user.Role != "Admin" && user.Role != "Driver")
             {
                 return (null, "FORBIDDEN_ROLE", "คุณไม่มีสิทธิ์เข้าใช้งานระบบ Mobile");
             }
         }
-        else
+        else if (channel != 1)
         {
             return (null, "INVALID_CHANNEL", "ช่องทางการเข้าสู่ระบบไม่ถูกต้อง (Channel 1: Admin Dashboard, Channel 2: Mobile)");
         }

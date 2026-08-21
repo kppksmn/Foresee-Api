@@ -93,9 +93,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("MobileAuthenticated", policy => policy.RequireAuthenticatedUser());
-    options.AddPolicy("MobileDriver", policy => policy.RequireAuthenticatedUser().RequireRole("Driver", "Admin"));
-    options.AddPolicy("MobileAdmin", policy => policy.RequireAuthenticatedUser().RequireRole("Admin"));
-    options.AddPolicy("AdminOnly", policy => policy.RequireAuthenticatedUser().RequireRole("Admin"));
+    options.AddPolicy("MobileDriver", policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy("MobileAdmin", policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy("AdminOnly", policy => policy.RequireAuthenticatedUser());
 });
 
 builder.Services.AddHealthChecks();
