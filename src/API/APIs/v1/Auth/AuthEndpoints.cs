@@ -155,6 +155,8 @@ public static class AuthEndpoints
             [FromQuery] string? search,
             [FromQuery] string? status,
             [FromQuery] string? date,
+            [FromQuery] string? startDate,
+            [FromQuery] string? endDate,
             ICurrentUser currentUser,
             DbConnectionFactory db,
             CancellationToken ct) =>
@@ -202,6 +204,8 @@ public static class AuthEndpoints
                   AND (j.driver_id = @UserId OR j.companion_id = @UserId)
                   AND (@status IS NULL OR @status = '' OR j.status = @status)
                   AND (@date IS NULL OR @date = '' OR TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') = @date)
+                  AND (@startDate IS NULL OR @startDate = '' OR TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') >= @startDate)
+                  AND (@endDate IS NULL OR @endDate = '' OR TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') <= @endDate)
                   AND (
                     @search IS NULL OR @search = '' OR 
                     j.job_number ILIKE '%' || @search || '%' OR 
@@ -212,7 +216,7 @@ public static class AuthEndpoints
                   )
                 ORDER BY j.id DESC;";
 
-            var list = await conn.QueryAsync<AdminJobListItemDto>(new CommandDefinition(sql, new { UserId = currentUser.UserId, search, status, date }, cancellationToken: ct));
+            var list = await conn.QueryAsync<AdminJobListItemDto>(new CommandDefinition(sql, new { UserId = currentUser.UserId, search, status, date, startDate, endDate }, cancellationToken: ct));
             return Results.Ok(ApiResponse<IEnumerable<AdminJobListItemDto>>.Ok(list, "ดึงรายการงานของฉันสำเร็จ"));
         })
         .RequireAuthorization()

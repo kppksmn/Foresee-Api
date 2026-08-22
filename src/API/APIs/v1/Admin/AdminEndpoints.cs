@@ -388,7 +388,7 @@ public static class AdminEndpoints
         .Produces<ApiResponse<IEnumerable<AdminUserListItemDto>>>(StatusCodes.Status200OK)
         .WithSummary("ดึงรายชื่อผู้ใช้งานทั้งหมด (List Users)");
 
-        group.MapGet("/jobs", async ([FromQuery] string? search, [FromQuery] string? status, [FromQuery] string? mode, [FromQuery] string? date, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
+        group.MapGet("/jobs", async ([FromQuery] string? search, [FromQuery] string? status, [FromQuery] string? mode, [FromQuery] string? date, [FromQuery] string? startDate, [FromQuery] string? endDate, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
             var targetEp = mode == "history" ? "/jobs/history" : "/jobs";
             var hasTargetPermission = await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, targetEp, "read", ct);
@@ -463,6 +463,8 @@ public static class AdminEndpoints
                 WHERE j.deleted_at IS NULL
                   AND (@status IS NULL OR @status = '' OR j.status = @status)
                   AND (@date IS NULL OR @date = '' OR TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') = @date)
+                  AND (@startDate IS NULL OR @startDate = '' OR TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') >= @startDate)
+                  AND (@endDate IS NULL OR @endDate = '' OR TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') <= @endDate)
                   AND (
                     CASE 
                       WHEN @mode = 'history' THEN j.status IN ('Completed', 'Cancelled')
@@ -480,7 +482,7 @@ public static class AdminEndpoints
                   )
                 ORDER BY j.id DESC;";
 
-            var list = await conn.QueryAsync<AdminJobListItemDto>(new CommandDefinition(sql, new { search, status, mode, date }, cancellationToken: ct));
+            var list = await conn.QueryAsync<AdminJobListItemDto>(new CommandDefinition(sql, new { search, status, mode, date, startDate, endDate }, cancellationToken: ct));
             return Results.Ok(ApiResponse<IEnumerable<AdminJobListItemDto>>.Ok(list));
         })
         .Produces<ApiResponse<IEnumerable<AdminJobListItemDto>>>(StatusCodes.Status200OK)
