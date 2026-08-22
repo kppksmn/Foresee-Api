@@ -1172,8 +1172,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<IEnumerable<VehicleTypeItemDto>>>(StatusCodes.Status200OK)
         .WithSummary("ดึงประเภทรถทั้งหมด (List Vehicle Types)");
 
-        group.MapPost("/vehicle-types", async ([FromBody] CreateVehicleTypeDto req, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapPost("/vehicle-types", async ([FromBody] CreateVehicleTypeDto req, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/vehicle-types", "create", ct))
+            {
+                return Results.Json(ApiResponse<CreatedEntityResponseDto>.Fail("คุณไม่มีสิทธิ์ในการเพิ่มประเภทรถ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             if (string.IsNullOrWhiteSpace(req.Name))
                 return Results.BadRequest(ApiResponse<string>.Fail("กรุณากรอกชื่อประเภทรถ"));
 
@@ -1197,8 +1202,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .WithSummary("เพิ่มประเภทรถใหม่ (Create Vehicle Type)");
 
-        group.MapPut("/vehicle-types/{id:long}", async (long id, [FromBody] UpdateVehicleTypeDto req, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapPut("/vehicle-types/{id:long}", async (long id, [FromBody] UpdateVehicleTypeDto req, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/vehicle-types", "update", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการแก้ไขประเภทรถ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             if (string.IsNullOrWhiteSpace(req.Name))
                 return Results.BadRequest(ApiResponse<string>.Fail("กรุณากรอกชื่อประเภทรถ"));
 
@@ -1236,8 +1246,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("แก้ไขประเภทรถ (Update Vehicle Type)");
 
-        group.MapDelete("/vehicle-types/{id:long}", async (long id, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapDelete("/vehicle-types/{id:long}", async (long id, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/vehicle-types", "delete", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการลบประเภทรถ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var typeName = await conn.ExecuteScalarAsync<string>("SELECT name FROM vehicle_types WHERE id = @id AND deleted_at IS NULL;", new { id });
             if (typeName == null)
