@@ -56,6 +56,26 @@ public static class AdminEndpoints
             }
 
             using var conn = db.CreateConnection();
+
+            if (req.DriverId.HasValue)
+            {
+                var profileRepo = new UserProfileRepository(db);
+                var driver = await profileRepo.GetByUserIdAsync(req.DriverId.Value, ct);
+                if (driver != null && driver.LicenseExpirationDate.HasValue && driver.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
+                {
+                    return Results.BadRequest(ApiResponse<string>.Fail($"ไม่สามารถมอบหมายงานให้ได้ เนื่องจากใบอนุญาตขับขี่ของพนักงานขับรถ '{driver.FirstName} {driver.LastName}' หมดอายุแล้ว (หมดอายุวันที่ {driver.LicenseExpirationDate.Value:dd/MM/yyyy})"));
+                }
+            }
+            if (req.CompanionId.HasValue)
+            {
+                var profileRepo = new UserProfileRepository(db);
+                var companion = await profileRepo.GetByUserIdAsync(req.CompanionId.Value, ct);
+                if (companion != null && companion.LicenseExpirationDate.HasValue && companion.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
+                {
+                    return Results.BadRequest(ApiResponse<string>.Fail($"ไม่สามารถมอบหมายงานให้ได้ เนื่องจากใบอนุญาตขับขี่ของผู้ติดตาม '{companion.FirstName} {companion.LastName}' หมดอายุแล้ว (หมดอายุวันที่ {companion.LicenseExpirationDate.Value:dd/MM/yyyy})"));
+                }
+            }
+
             var scheduledStartAtUtc = NormalizeToUtc(req.ScheduledStartAt);
 
             // Validate driver and companion schedule conflict at the same date and arrival time
@@ -153,18 +173,7 @@ public static class AdminEndpoints
                 _ = pushNotificationService.SendJobAssignedNotificationAsync(req.CompanionId.Value, id, jobNumber, req.Title, req.PickupLocation, ct);
             }
 
-            List<string>? warnings = null;
-            if (req.DriverId.HasValue)
-            {
-                var profileRepo = new UserProfileRepository(db);
-                var driver = await profileRepo.GetByUserIdAsync(req.DriverId.Value, ct);
-                if (driver != null && driver.LicenseExpirationDate.HasValue && driver.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
-                {
-                    warnings = new List<string> { $"Warning: Driver '{driver.FirstName} {driver.LastName}' has an expired license!" };
-                }
-            }
-
-            return Results.Ok(ApiResponse<CreatedJobResponseDto>.Ok(new CreatedJobResponseDto(id, jobNumber, status), "Job created successfully", warnings));
+            return Results.Ok(ApiResponse<CreatedJobResponseDto>.Ok(new CreatedJobResponseDto(id, jobNumber, status), "Job created successfully"));
         })
         .Produces<ApiResponse<CreatedJobResponseDto>>(StatusCodes.Status200OK)
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
@@ -178,6 +187,22 @@ public static class AdminEndpoints
             }
 
             using var conn = db.CreateConnection();
+
+            var profileRepo = new UserProfileRepository(db);
+            var driver = await profileRepo.GetByUserIdAsync(req.DriverId, ct);
+            if (driver != null && driver.LicenseExpirationDate.HasValue && driver.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
+            {
+                return Results.BadRequest(ApiResponse<string>.Fail($"ไม่สามารถมอบหมายงานให้ได้ เนื่องจากใบอนุญาตขับขี่ของพนักงานขับรถ '{driver.FirstName} {driver.LastName}' หมดอายุแล้ว (หมดอายุวันที่ {driver.LicenseExpirationDate.Value:dd/MM/yyyy})"));
+            }
+            if (req.CompanionId.HasValue)
+            {
+                var companion = await profileRepo.GetByUserIdAsync(req.CompanionId.Value, ct);
+                if (companion != null && companion.LicenseExpirationDate.HasValue && companion.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
+                {
+                    return Results.BadRequest(ApiResponse<string>.Fail($"ไม่สามารถมอบหมายงานให้ได้ เนื่องจากใบอนุญาตขับขี่ของผู้ติดตาม '{companion.FirstName} {companion.LastName}' หมดอายุแล้ว (หมดอายุวันที่ {companion.LicenseExpirationDate.Value:dd/MM/yyyy})"));
+                }
+            }
+
             var jobInfo = await conn.QueryFirstOrDefaultAsync(@"
                 SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", job_number AS ""jobNumber"", title, pickup_location AS ""pickupLocation"", scheduled_start_at AS ""scheduledStartAt"" 
                 FROM jobs 
@@ -261,15 +286,7 @@ public static class AdminEndpoints
                 _ = pushNotificationService.SendJobAssignedNotificationAsync(targetCompanionId.Value, jobId, (string)jobInfo.jobNumber, (string)jobInfo.title, (string)jobInfo.pickupLocation, ct);
             }
 
-            List<string>? warnings = null;
-            var profileRepo = new UserProfileRepository(db);
-            var driver = await profileRepo.GetByUserIdAsync(req.DriverId, ct);
-            if (driver != null && driver.LicenseExpirationDate.HasValue && driver.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
-            {
-                warnings = new List<string> { $"Warning: Driver '{driver.FirstName} {driver.LastName}' has an expired license!" };
-            }
-
-            return Results.Ok(ApiResponse<string>.Ok("Job assigned successfully", warnings: warnings));
+            return Results.Ok(ApiResponse<string>.Ok("Job assigned successfully"));
         })
         .Produces<ApiResponse<string>>(StatusCodes.Status200OK)
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
@@ -704,6 +721,25 @@ public static class AdminEndpoints
                 if (!req.VehicleId.HasValue) return Results.BadRequest(ApiResponse<string>.Fail("สถานะงานที่ระบุจำเป็นต้องมียานพาหนะ"));
             }
 
+            if (req.DriverId.HasValue)
+            {
+                var profileRepo = new UserProfileRepository(db);
+                var driver = await profileRepo.GetByUserIdAsync(req.DriverId.Value, ct);
+                if (driver != null && driver.LicenseExpirationDate.HasValue && driver.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
+                {
+                    return Results.BadRequest(ApiResponse<string>.Fail($"ไม่สามารถมอบหมายงานให้ได้ เนื่องจากใบอนุญาตขับขี่ของพนักงานขับรถ '{driver.FirstName} {driver.LastName}' หมดอายุแล้ว (หมดอายุวันที่ {driver.LicenseExpirationDate.Value:dd/MM/yyyy})"));
+                }
+            }
+            if (req.CompanionId.HasValue)
+            {
+                var profileRepo = new UserProfileRepository(db);
+                var companion = await profileRepo.GetByUserIdAsync(req.CompanionId.Value, ct);
+                if (companion != null && companion.LicenseExpirationDate.HasValue && companion.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
+                {
+                    return Results.BadRequest(ApiResponse<string>.Fail($"ไม่สามารถมอบหมายงานให้ได้ เนื่องจากใบอนุญาตขับขี่ของผู้ติดตาม '{companion.FirstName} {companion.LastName}' หมดอายุแล้ว (หมดอายุวันที่ {companion.LicenseExpirationDate.Value:dd/MM/yyyy})"));
+                }
+            }
+
             // Validate driver and companion schedule conflict at the same date and arrival time (excluding current job)
             var scheduledStartAtUtc = NormalizeToUtc(req.ScheduledStartAt);
             var targetScheduledTime = scheduledStartAtUtc ?? (DateTime?)oldJob.scheduledStartAt;
@@ -963,18 +999,7 @@ public static class AdminEndpoints
                 }
             }
 
-            List<string>? warnings = null;
-            if (req.DriverId.HasValue)
-            {
-                var profileRepo = new UserProfileRepository(db);
-                var driver = await profileRepo.GetByUserIdAsync(req.DriverId.Value, ct);
-                if (driver != null && driver.LicenseExpirationDate.HasValue && driver.LicenseExpirationDate.Value < DateTime.UtcNow.Date)
-                {
-                    warnings = new List<string> { $"Warning: Driver '{driver.FirstName} {driver.LastName}' has an expired license!" };
-                }
-            }
-
-            return Results.Ok(ApiResponse<string>.Ok("Job updated successfully", warnings: warnings));
+            return Results.Ok(ApiResponse<string>.Ok("Job updated successfully"));
         })
         .Produces<ApiResponse<string>>(StatusCodes.Status200OK)
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
