@@ -391,7 +391,10 @@ public static class AdminEndpoints
         group.MapGet("/jobs", async ([FromQuery] string? search, [FromQuery] string? status, [FromQuery] string? mode, [FromQuery] string? date, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
             var targetEp = mode == "history" ? "/jobs/history" : "/jobs";
-            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, targetEp, "read", ct))
+            var hasTargetPermission = await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, targetEp, "read", ct);
+            var hasMyJobsPermission = await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/my-jobs", "read", ct);
+
+            if (!hasTargetPermission && !(hasMyJobsPermission && mode != "history"))
             {
                 return Results.Json(ApiResponse<AdminJobListResponseDto>.Fail("คุณไม่มีสิทธิ์เข้าถึงรายการงาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
             }
