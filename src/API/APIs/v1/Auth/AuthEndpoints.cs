@@ -1,5 +1,7 @@
 using Core.DTOs;
 using Core.Interfaces;
+using Dapper;
+using Infrastructure.Data;
 using Infrastructure.Repositories;
 using Infrastructure.Services;
 using Library.Common;
@@ -148,5 +150,74 @@ public static class AuthEndpoints
         .Produces<ApiResponse<List<UserNavMenuDto>>>(StatusCodes.Status200OK)
         .Produces(StatusCodes.Status401Unauthorized)
         .WithSummary("ดึงโครงสร้างเมนูที่ผู้ใช้ได้รับสิทธิ์ (Get Navigable Menus for Current User)");
+
+        group.MapGet("/me/jobs", async (
+            [FromQuery] string? search,
+            [FromQuery] string? status,
+            [FromQuery] string? date,
+            ICurrentUser currentUser,
+            DbConnectionFactory db,
+            CancellationToken ct) =>
+        {
+            if (currentUser.UserId <= 0) return Results.Unauthorized();
+
+            using var conn = db.CreateConnection();
+            var sql = @"
+                SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
+                       j.pickup_location AS ""pickupLocation"", j.pickup_lat AS ""pickupLat"", j.pickup_lng AS ""pickupLng"",
+                       j.contact_name AS ""contactName"", j.contact_phone AS ""contactPhone"", j.companions,
+                       j.companion_id AS ""companionId"",
+                       j.scheduled_start_at AS ""scheduledStartAt"",
+                       CASE 
+                           WHEN j.companion_id IS NULL THEN j.companions
+                           ELSE COALESCE(
+                               NULLIF(TRIM(COALESCE(cp_p.first_name, '') || ' ' || COALESCE(cp_p.last_name, '')), ''),
+                               cp_u.username,
+                               j.companions
+                           )
+                       END AS ""companionName"",
+                       j.cancellation_reason AS ""cancellationReason"",
+                       j.cancelled_at AS ""cancelledAt"",
+                       j.cancelled_by AS ""cancelledBy"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') AS ""scheduledDate"",
+                       TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'HH24:MI') AS ""scheduledTime"",
+                       CASE 
+                           WHEN j.driver_id IS NULL THEN NULL
+                           ELSE COALESCE(
+                               NULLIF(TRIM(COALESCE(p.first_name, '') || ' ' || COALESCE(p.last_name, '')), ''),
+                               u.username,
+                               'พนักงาน #' || CAST(j.driver_id AS TEXT)
+                           )
+                       END AS ""driverName"",
+                       v.plate_number AS ""vehiclePlate"",
+                       vt.name AS ""vehicleType""
+                FROM jobs j
+                LEFT JOIN user_profiles p ON p.user_id = j.driver_id
+                LEFT JOIN users u ON u.id = j.driver_id
+                LEFT JOIN user_profiles cp_p ON cp_p.user_id = j.companion_id AND cp_p.deleted_at IS NULL
+                LEFT JOIN users cp_u ON cp_u.id = j.companion_id AND cp_u.deleted_at IS NULL
+                LEFT JOIN vehicles v ON v.id = j.vehicle_id AND v.deleted_at IS NULL
+                LEFT JOIN vehicle_types vt ON vt.id = v.vehicle_type_id
+                WHERE j.deleted_at IS NULL
+                  AND (j.driver_id = @UserId OR j.companion_id = @UserId)
+                  AND (@status IS NULL OR @status = '' OR j.status = @status)
+                  AND (@date IS NULL OR @date = '' OR TO_CHAR(j.scheduled_start_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') = @date)
+                  AND (
+                    @search IS NULL OR @search = '' OR 
+                    j.job_number ILIKE '%' || @search || '%' OR 
+                    j.title ILIKE '%' || @search || '%' OR
+                    j.pickup_location ILIKE '%' || @search || '%' OR
+                    COALESCE(j.contact_name, '') ILIKE '%' || @search || '%' OR
+                    COALESCE(v.plate_number, '') ILIKE '%' || @search || '%'
+                  )
+                ORDER BY j.id DESC;";
+
+            var list = await conn.QueryAsync<AdminJobListItemDto>(new CommandDefinition(sql, new { UserId = currentUser.UserId, search, status, date }, cancellationToken: ct));
+            return Results.Ok(ApiResponse<IEnumerable<AdminJobListItemDto>>.Ok(list, "ดึงรายการงานของฉันสำเร็จ"));
+        })
+        .RequireAuthorization()
+        .Produces<ApiResponse<IEnumerable<AdminJobListItemDto>>>(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status401Unauthorized)
+        .WithSummary("ดึงรายการงานของฉัน (Get My Jobs)");
     }
 }

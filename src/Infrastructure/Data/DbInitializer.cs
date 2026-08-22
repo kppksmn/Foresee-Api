@@ -445,6 +445,20 @@ public static class DbInitializer
             await db.ExecuteAsync(seedMenusSql);
         }
 
+        // Ensure 'งานของฉัน' (/my-jobs) menu exists
+        var ensureMyJobsMenuSql = @"
+            INSERT INTO menus (name_th, endpoint, menu_type, seq, is_read, is_create, is_update, is_delete, is_import, is_export, created_at)
+            VALUES ('งานของฉัน', '/my-jobs', 1, 2, TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, CURRENT_TIMESTAMP)
+            ON CONFLICT DO NOTHING;
+
+            INSERT INTO user_menu_permissions (user_id, menu_id, is_read, is_create, is_update, is_delete, is_import, is_export, created_at)
+            SELECT u.id, m.id, TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, CURRENT_TIMESTAMP
+            FROM users u
+            CROSS JOIN menus m
+            WHERE m.endpoint = '/my-jobs' AND m.deleted_at IS NULL
+            ON CONFLICT (user_id, menu_id) DO NOTHING;";
+        await db.ExecuteAsync(ensureMyJobsMenuSql);
+
         // Seed default full permissions for Admin users
         var seedAdminMenuPermsSql = @"
             INSERT INTO user_menu_permissions (user_id, menu_id, is_read, is_create, is_update, is_delete, is_import, is_export, created_at)
