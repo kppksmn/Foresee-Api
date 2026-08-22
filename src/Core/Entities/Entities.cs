@@ -166,7 +166,6 @@ public class Menu
 {
     public int Id { get; set; }
     public string NameTh { get; set; } = string.Empty;
-    public string NameEn { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
     public MenuType MenuType { get; set; } = MenuType.Internal;
     public string? ExternalUrl { get; set; }

@@ -483,7 +483,7 @@ public class MenuManagementRepository
     {
         using var conn = _db.CreateConnection();
         const string sql = @"
-            SELECT id, name_th AS NameTh, name_en AS NameEn, endpoint, menu_type AS MenuType, 
+            SELECT id, name_th AS NameTh, endpoint, menu_type AS MenuType, 
                    external_url AS ExternalUrl, target_path AS TargetPath, open_mode AS OpenMode, 
                    authentication_mode AS AuthenticationMode, parent_id AS ParentId, seq, 
                    is_public AS IsPublic, is_marketing AS IsMarketing, is_read AS IsRead, 
@@ -501,7 +501,7 @@ public class MenuManagementRepository
     {
         using var conn = _db.CreateConnection();
         const string sql = @"
-            SELECT id, name_th AS NameTh, name_en AS NameEn, endpoint, menu_type AS MenuType, 
+            SELECT id, name_th AS NameTh, endpoint, menu_type AS MenuType, 
                    external_url AS ExternalUrl, target_path AS TargetPath, open_mode AS OpenMode, 
                    authentication_mode AS AuthenticationMode, parent_id AS ParentId, seq, 
                    is_public AS IsPublic, is_marketing AS IsMarketing, is_read AS IsRead, 
@@ -519,7 +519,7 @@ public class MenuManagementRepository
     {
         using var conn = _db.CreateConnection();
         const string sql = @"
-            SELECT id, name_th AS NameTh, name_en AS NameEn, endpoint, menu_type AS MenuType, 
+            SELECT id, name_th AS NameTh, endpoint, menu_type AS MenuType, 
                    external_url AS ExternalUrl, target_path AS TargetPath, open_mode AS OpenMode, 
                    authentication_mode AS AuthenticationMode, parent_id AS ParentId, seq, 
                    is_public AS IsPublic, is_marketing AS IsMarketing, is_read AS IsRead, 
@@ -545,26 +545,26 @@ public class MenuManagementRepository
     public async Task<int> CreateMenuAsync(MenuManagementUpsertMenuRequest req, string createdBy, CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
+        long? createdByUserId = long.TryParse(createdBy, out var cBy) ? cBy : null;
         const string sql = @"
             INSERT INTO public.menus
             (
-                name_th, name_en, endpoint, menu_type, external_url, target_path,
+                name_th, endpoint, menu_type, external_url, target_path,
                 open_mode, authentication_mode, parent_id, seq, is_public, is_marketing,
                 is_read, is_create, is_update, is_delete, is_import, is_export,
                 created_by, created_at, updated_by, updated_at
             )
             VALUES
             (
-                @NameTh, @NameEn, @Endpoint, @MenuType, @ExternalUrl, @TargetPath,
+                @NameTh, @Endpoint, @MenuType, @ExternalUrl, @TargetPath,
                 @OpenMode, @AuthenticationMode, @ParentId, @Seq, @IsPublic, @IsMarketing,
                 @IsRead, @IsCreate, @IsUpdate, @IsDelete, @IsImport, @IsExport,
-                @createdBy, CURRENT_TIMESTAMP, @createdBy, CURRENT_TIMESTAMP
+                @createdByUserId, CURRENT_TIMESTAMP, @createdByUserId, CURRENT_TIMESTAMP
             )
             RETURNING id;";
         return await conn.ExecuteScalarAsync<int>(new CommandDefinition(sql, new
         {
             req.NameTh,
-            req.NameEn,
             Endpoint = string.IsNullOrWhiteSpace(req.Endpoint) ? null : req.Endpoint.Trim(),
             MenuType = (int)req.MenuType,
             ExternalUrl = string.IsNullOrWhiteSpace(req.ExternalUrl) ? null : req.ExternalUrl.Trim(),
@@ -581,17 +581,17 @@ public class MenuManagementRepository
             req.IsDelete,
             req.IsImport,
             req.IsExport,
-            createdBy
+            createdByUserId
         }, cancellationToken: ct));
     }
 
     public async Task<int> UpdateMenuAsync(int id, MenuManagementUpsertMenuRequest req, string updatedBy, CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
+        long? updatedByUserId = long.TryParse(updatedBy, out var uBy) ? uBy : null;
         const string sql = @"
             UPDATE public.menus SET
                 name_th = @NameTh,
-                name_en = @NameEn,
                 endpoint = @Endpoint,
                 menu_type = @MenuType,
                 external_url = @ExternalUrl,
@@ -608,14 +608,13 @@ public class MenuManagementRepository
                 is_delete = @IsDelete,
                 is_import = @IsImport,
                 is_export = @IsExport,
-                updated_by = @updatedBy,
+                updated_by = @updatedByUserId,
                 updated_at = CURRENT_TIMESTAMP
             WHERE deleted_at IS NULL AND id = @id;";
         return await conn.ExecuteAsync(new CommandDefinition(sql, new
         {
             id,
             req.NameTh,
-            req.NameEn,
             Endpoint = string.IsNullOrWhiteSpace(req.Endpoint) ? null : req.Endpoint.Trim(),
             MenuType = (int)req.MenuType,
             ExternalUrl = string.IsNullOrWhiteSpace(req.ExternalUrl) ? null : req.ExternalUrl.Trim(),
@@ -632,13 +631,14 @@ public class MenuManagementRepository
             req.IsDelete,
             req.IsImport,
             req.IsExport,
-            updatedBy
+            updatedByUserId
         }, cancellationToken: ct));
     }
 
     public async Task<int> DeleteMenuAsync(int id, string deletedBy, CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
+        long? deletedByUserId = long.TryParse(deletedBy, out var dBy) ? dBy : null;
         const string sql = @"
             WITH RECURSIVE menu_tree AS (
                 SELECT id FROM public.menus WHERE id = @id AND deleted_at IS NULL
@@ -648,9 +648,9 @@ public class MenuManagementRepository
                 WHERE m.deleted_at IS NULL
             )
             UPDATE public.menus
-            SET deleted_by = @deletedBy, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            SET deleted_by = @deletedByUserId, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE id IN (SELECT id FROM menu_tree);";
-        return await conn.ExecuteAsync(new CommandDefinition(sql, new { id, deletedBy }, cancellationToken: ct));
+        return await conn.ExecuteAsync(new CommandDefinition(sql, new { id, deletedByUserId }, cancellationToken: ct));
     }
 
     private static List<MenuManagementMenuTreeResponse> BuildMenuTree(List<Menu> menus)
@@ -694,7 +694,6 @@ public class MenuManagementRepository
                 m.id AS menuid,
                 m.parent_id AS parentid,
                 m.name_th AS nameth,
-                m.name_en AS nameen,
                 m.endpoint,
                 m.seq,
                 m.is_public AS ispublic,
@@ -728,7 +727,6 @@ public class MenuManagementRepository
                 MenuId = (long)r.menuid,
                 ParentId = r.parentid != null ? (long)r.parentid : null,
                 NameTh = (string)r.nameth,
-                NameEn = (string)r.nameen,
                 Endpoint = ep,
                 Seq = (int)r.seq,
                 IsPublic = (bool)r.ispublic,
@@ -879,7 +877,6 @@ public class MenuManagementRepository
                 m.id,
                 m.parent_id AS parentid,
                 m.name_th AS nameth,
-                m.name_en AS nameen,
                 m.endpoint,
                 m.menu_type AS menutype,
                 m.external_url AS externalurl,
@@ -910,7 +907,6 @@ public class MenuManagementRepository
                 Id = (long)r.id,
                 ParentId = r.parentid != null ? (long)r.parentid : (long?)null,
                 NameTh = (string)r.nameth,
-                NameEn = (string)r.nameen,
                 Endpoint = ep,
                 MenuType = (int)r.menutype,
                 ExternalUrl = (string?)r.externalurl,
@@ -954,7 +950,6 @@ public class MenuManagementRepository
                 Id = i.Id,
                 ParentId = i.ParentId,
                 NameTh = i.NameTh,
-                NameEn = i.NameEn,
                 Endpoint = i.Endpoint,
                 MenuType = i.MenuType,
                 ExternalUrl = i.ExternalUrl,

@@ -2197,18 +2197,12 @@ public static class AdminEndpoints
 
         group.MapPost("", async ([FromBody] MenuManagementUpsertMenuRequest req, ICurrentUser user, MenuManagementRepository menuRepo, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
-            if (string.IsNullOrWhiteSpace(req.NameTh) || string.IsNullOrWhiteSpace(req.NameEn))
+            if (string.IsNullOrWhiteSpace(req.NameTh))
             {
-                return Results.BadRequest(ApiResponse<MenuManagementMenuResponse?>.Fail("กรุณาระบุชื่อเมนูภาษาไทยและภาษาอังกฤษ"));
+                return Results.BadRequest(ApiResponse<MenuManagementMenuResponse?>.Fail("กรุณาระบุชื่อเมนู"));
             }
 
-            if (req.MenuType == MenuType.External)
-            {
-                if (string.IsNullOrWhiteSpace(req.Endpoint) || string.IsNullOrWhiteSpace(req.ExternalUrl) || string.IsNullOrWhiteSpace(req.TargetPath))
-                {
-                    return Results.BadRequest(ApiResponse<MenuManagementMenuResponse?>.Fail("เมนู External App จำเป็นต้องระบุ Endpoint, External URL และ Target Path"));
-                }
-            }
+            req.MenuType = MenuType.Internal;
 
             if (!string.IsNullOrWhiteSpace(req.Endpoint) && await menuRepo.ExistsEndpointAsync(req.Endpoint, null, ct))
             {
@@ -2218,7 +2212,7 @@ public static class AdminEndpoints
             var id = await menuRepo.CreateMenuAsync(req, user.UserId.ToString(), ct);
             var createdMenu = await menuRepo.GetMenuByIdAsync(id, ct);
 
-            await auditRepo.LogAsync(user.UserId, "CREATE_MENU", "menus", id.ToString(), $"สร้างเมนู {req.NameEn} ({req.NameTh})", null, ct);
+            await auditRepo.LogAsync(user.UserId, "CREATE_MENU", "menus", id.ToString(), $"สร้างเมนู {req.NameTh}", null, ct);
 
             return Results.Ok(ApiResponse<MenuManagementMenuResponse?>.Ok(createdMenu == null ? null : MenuManagementMenuResponse.From(createdMenu)));
         })
@@ -2234,9 +2228,9 @@ public static class AdminEndpoints
                 return Results.NotFound(ApiResponse<MenuManagementMenuResponse?>.Fail("ไม่พบเมนูที่ต้องการแก้ไข"));
             }
 
-            if (string.IsNullOrWhiteSpace(req.NameTh) || string.IsNullOrWhiteSpace(req.NameEn))
+            if (string.IsNullOrWhiteSpace(req.NameTh))
             {
-                return Results.BadRequest(ApiResponse<MenuManagementMenuResponse?>.Fail("กรุณาระบุชื่อเมนูภาษาไทยและภาษาอังกฤษ"));
+                return Results.BadRequest(ApiResponse<MenuManagementMenuResponse?>.Fail("กรุณาระบุชื่อเมนู"));
             }
 
             if (req.ParentId.HasValue && req.ParentId.Value == id)
@@ -2244,13 +2238,7 @@ public static class AdminEndpoints
                 return Results.BadRequest(ApiResponse<MenuManagementMenuResponse?>.Fail("Parent Menu ต้องไม่เป็นตัวเอง"));
             }
 
-            if (req.MenuType == MenuType.External)
-            {
-                if (string.IsNullOrWhiteSpace(req.Endpoint) || string.IsNullOrWhiteSpace(req.ExternalUrl) || string.IsNullOrWhiteSpace(req.TargetPath))
-                {
-                    return Results.BadRequest(ApiResponse<MenuManagementMenuResponse?>.Fail("เมนู External App จำเป็นต้องระบุ Endpoint, External URL และ Target Path"));
-                }
-            }
+            req.MenuType = MenuType.Internal;
 
             if (!string.IsNullOrWhiteSpace(req.Endpoint) && await menuRepo.ExistsEndpointAsync(req.Endpoint, id, ct))
             {
@@ -2264,7 +2252,7 @@ public static class AdminEndpoints
             }
 
             var updatedMenu = await menuRepo.GetMenuByIdAsync(id, ct);
-            await auditRepo.LogAsync(user.UserId, "UPDATE_MENU", "menus", id.ToString(), $"แก้ไขเมนู {req.NameEn} ({req.NameTh})", null, ct);
+            await auditRepo.LogAsync(user.UserId, "UPDATE_MENU", "menus", id.ToString(), $"แก้ไขเมนู {req.NameTh}", null, ct);
 
             return Results.Ok(ApiResponse<MenuManagementMenuResponse?>.Ok(updatedMenu == null ? null : MenuManagementMenuResponse.From(updatedMenu)));
         };
@@ -2289,8 +2277,13 @@ public static class AdminEndpoints
                 return Results.NotFound(ApiResponse<string>.Fail("ไม่พบเมนูที่ต้องการลบ"));
             }
 
+            if (existing.Endpoint == "/menu-managements" || existing.Endpoint == "/menu-managements/permissions")
+            {
+                return Results.BadRequest(ApiResponse<string>.Fail("ไม่สามารถลบเมนูจัดการระบบหลักได้"));
+            }
+
             var affected = await menuRepo.DeleteMenuAsync(id, user.UserId.ToString(), ct);
-            await auditRepo.LogAsync(user.UserId, "DELETE_MENU", "menus", id.ToString(), $"ลบเมนู #{id} {existing.NameEn} และเมนูลูกทั้งหมด ({affected} records)", null, ct);
+            await auditRepo.LogAsync(user.UserId, "DELETE_MENU", "menus", id.ToString(), $"ลบเมนู #{id} {existing.NameTh} และเมนูลูกทั้งหมด ({affected} records)", null, ct);
 
             return Results.Ok(ApiResponse<string>.Ok($"ลบเมนูและเมนูลูกสำเร็จ ({affected} รายการ)"));
         })

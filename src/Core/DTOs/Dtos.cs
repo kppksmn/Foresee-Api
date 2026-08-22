@@ -414,7 +414,6 @@ public record TestNotificationRequestDto(long? UserId, string? FcmToken, string 
 public class MenuManagementUpsertMenuRequest
 {
     public string NameTh { get; set; } = string.Empty;
-    public string NameEn { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
     public MenuType MenuType { get; set; } = MenuType.Internal;
     public string? ExternalUrl { get; set; }
@@ -437,7 +436,6 @@ public class MenuManagementMenuResponse
 {
     public int Id { get; set; }
     public string NameTh { get; set; } = string.Empty;
-    public string NameEn { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
     public MenuType MenuType { get; set; } = MenuType.Internal;
     public string? ExternalUrl { get; set; }
@@ -459,7 +457,6 @@ public class MenuManagementMenuResponse
     {
         Id = menu.Id,
         NameTh = menu.NameTh,
-        NameEn = menu.NameEn,
         Endpoint = menu.Endpoint,
         MenuType = menu.MenuType,
         ExternalUrl = menu.ExternalUrl,
@@ -483,7 +480,6 @@ public class MenuManagementMenuTreeResponse
 {
     public int Id { get; set; }
     public string NameTh { get; set; } = string.Empty;
-    public string NameEn { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
     public MenuType MenuType { get; set; } = MenuType.Internal;
     public string? ExternalUrl { get; set; }
@@ -506,7 +502,6 @@ public class MenuManagementMenuTreeResponse
     {
         Id = menu.Id,
         NameTh = menu.NameTh,
-        NameEn = menu.NameEn,
         Endpoint = menu.Endpoint,
         MenuType = menu.MenuType,
         ExternalUrl = menu.ExternalUrl,
@@ -532,7 +527,6 @@ public class UserMenuPermissionNodeDto
     public long MenuId { get; set; }
     public long? ParentId { get; set; }
     public string NameTh { get; set; } = string.Empty;
-    public string NameEn { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
     public int Seq { get; set; }
     public bool IsPublic { get; set; }
@@ -578,7 +572,6 @@ public class UserNavMenuDto
     public long Id { get; set; }
     public long? ParentId { get; set; }
     public string NameTh { get; set; } = string.Empty;
-    public string NameEn { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
     public int MenuType { get; set; } = 1;
     public string? ExternalUrl { get; set; }

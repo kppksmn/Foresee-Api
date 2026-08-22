@@ -232,7 +232,6 @@ public static class DbInitializer
             CREATE TABLE IF NOT EXISTS menus (
                 id BIGSERIAL PRIMARY KEY,
                 name_th VARCHAR(255) NOT NULL,
-                name_en VARCHAR(255) NOT NULL,
                 endpoint VARCHAR(255) NULL,
                 menu_type INT NOT NULL DEFAULT 1,
                 external_url TEXT NULL,
@@ -426,13 +425,33 @@ public static class DbInitializer
             }
         }
 
+        // Seed default system menus if table is empty
+        var menuCount = await db.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM menus WHERE deleted_at IS NULL;");
+        if (menuCount == 0)
+        {
+            var seedMenusSql = @"
+                INSERT INTO menus (name_th, endpoint, menu_type, seq, is_read, is_create, is_update, is_delete, is_import, is_export, created_at)
+                VALUES 
+                ('หน้าหลัก (Home)', '/home', 1, 0, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP),
+                ('ภาพรวมระบบ', '/dashboard', 1, 1, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP),
+                ('จัดการงานขนส่ง', '/jobs', 1, 2, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, CURRENT_TIMESTAMP),
+                ('จัดการผู้ใช้งาน', '/users', 1, 3, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP),
+                ('จัดการยานพาหนะ', '/vehicles', 1, 4, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP),
+                ('ประเภทรถ', '/vehicle-types', 1, 5, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP),
+                ('จัดการเมนูระบบ', '/menu-managements', 1, 6, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP),
+                ('กำหนดสิทธิ์เมนู', '/menu-managements/permissions', 1, 7, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP),
+                ('ประวัติการใช้งาน', '/audit-logs', 1, 8, TRUE, FALSE, FALSE, FALSE, FALSE, TRUE, CURRENT_TIMESTAMP);
+            ";
+            await db.ExecuteAsync(seedMenusSql);
+        }
+
         // Seed default full permissions for Admin users
         var seedAdminMenuPermsSql = @"
             INSERT INTO user_menu_permissions (user_id, menu_id, is_read, is_create, is_update, is_delete, is_import, is_export, created_at)
             SELECT u.id, m.id, m.is_read, m.is_create, m.is_update, m.is_delete, m.is_import, m.is_export, CURRENT_TIMESTAMP
             FROM users u
             CROSS JOIN menus m
-            WHERE u.role ILIKE 'Admin' AND m.deleted_at IS NULL AND m.endpoint IS NOT NULL
+            WHERE u.role ILIKE 'Admin' AND m.deleted_at IS NULL
             ON CONFLICT (user_id, menu_id) DO NOTHING;";
         await db.ExecuteAsync(seedAdminMenuPermsSql);
 
