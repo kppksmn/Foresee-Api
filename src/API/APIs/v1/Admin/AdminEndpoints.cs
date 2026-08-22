@@ -623,13 +623,25 @@ public static class AdminEndpoints
 
         group.MapGet("/jobs/{id:long}", async (long id, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "read", ct) &&
-                !await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs/history", "read", ct))
-            {
-                return Results.Json(ApiResponse<AdminJobListItemDto>.Fail("คุณไม่มีสิทธิ์เข้าถึงข้อมูลงานนี้ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
-            }
+            var hasJobsRead = await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "read", ct);
+            var hasHistoryRead = await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs/history", "read", ct);
+            var hasMyJobsRead = await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/my-jobs", "read", ct);
 
             using var conn = db.CreateConnection();
+
+            if (!hasJobsRead && !hasHistoryRead && !hasMyJobsRead)
+            {
+                var isAssigned = await conn.ExecuteScalarAsync<bool>(@"
+                    SELECT EXISTS (
+                        SELECT 1 FROM jobs 
+                        WHERE id = @id AND (driver_id = @UserId OR companion_id = @UserId) AND deleted_at IS NULL
+                    );", new { id, UserId = user.UserId });
+
+                if (!isAssigned)
+                {
+                    return Results.Json(ApiResponse<AdminJobListItemDto>.Fail("คุณไม่มีสิทธิ์เข้าถึงข้อมูลงานนี้ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+                }
+            }
             var sql = @"
                 SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
                        j.pickup_location AS ""pickupLocation"", j.pickup_lat AS ""pickupLat"", j.pickup_lng AS ""pickupLng"",
