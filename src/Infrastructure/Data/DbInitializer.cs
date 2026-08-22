@@ -521,7 +521,7 @@ public static class DbInitializer
                 contact_name, contact_phone, companions, status, cancellation_reason,
                 scheduled_start_at, driver_id, vehicle_id, created_at
             )
-            SELECT 'JOB-20260806', 'กระจายสินค้าอุปโภคบริโภค วังน้อย - นครราชสีมา', 'ขนส่งสินค้าอุปโภคบริโภคส่งห้างสรรพสินค้าภาคอีสาน', 'ศูนย์กระจายสินค้าวังน้อย ต.ลำไทร อ.วังน้อย พระนครศรีอยุธยา', 14.2335, 100.7142, 'ผู้จัดการคลังสินค้าโคราช', '0896667788', NULL, 'Arrived', NULL, '2026-08-20 09:30:00+07', p.user_id, v.id, '2026-08-20 07:30:00+07'
+            SELECT 'JOB-20260806', 'กระจายสินค้าอุปโภคบริโภค วังน้อย - นครราชสีมา', 'ขนส่งสินค้าอุปโภคบริโภคส่งห้างสรรพสินค้าภาคอีสาน', 'ศูนย์กระจายสินค้าวังน้อย ต.ลำไทร อ.วังน้อย พระนครศรีอยุธยา', 14.2335, 100.7142, 'ผู้จัดการคลังสินค้าโคราช', '0896667788', NULL, 'Started', NULL, '2026-08-20 09:30:00+07', p.user_id, v.id, '2026-08-20 07:30:00+07'
             FROM user_profiles p JOIN vehicles v ON v.plate_number = '72-3456' WHERE p.employee_code = 'DRV-006'
             ON CONFLICT (job_number) DO NOTHING;
 

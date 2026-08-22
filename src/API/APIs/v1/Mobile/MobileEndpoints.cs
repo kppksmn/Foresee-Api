@@ -314,8 +314,13 @@ public static class MobileEndpoints
             var job = await jobRepo.GetByIdAndDriverAsync(jobId, currentUser.UserId, currentDriver.DriverId, ct);
             if (job == null) return Results.NotFound(ApiResponse<string>.Fail("Job not found"));
 
-            bool success = await jobRepo.UpdateStatusAtomicAsync(jobId, "Arrived", "Completed", currentUser.UserId, DateTime.UtcNow, ct);
-            if (!success) return Results.BadRequest(ApiResponse<string>.Fail("Invalid job status transition. Must be in 'Arrived' status."));
+            bool success = await jobRepo.UpdateStatusAtomicAsync(jobId, "Started", "Completed", currentUser.UserId, DateTime.UtcNow, ct);
+            if (!success)
+            {
+                success = await jobRepo.UpdateStatusAtomicAsync(jobId, "Assigned", "Completed", currentUser.UserId, DateTime.UtcNow, ct) ||
+                          await jobRepo.UpdateStatusAtomicAsync(jobId, "Arrived", "Completed", currentUser.UserId, DateTime.UtcNow, ct);
+            }
+            if (!success) return Results.BadRequest(ApiResponse<string>.Fail("Invalid job status transition. Must be in 'Started' or 'Assigned' status."));
 
             return Results.Ok(ApiResponse<string>.Ok("Job completed successfully"));
         })
