@@ -288,6 +288,7 @@ public static class DbInitializer
         ";
 
         await db.ExecuteAsync(sql);
+        await db.ExecuteAsync("UPDATE menus SET name_th = 'จัดการงาน' WHERE endpoint = '/jobs' AND name_th = 'งานปัจจุบัน';");
 
         var passwordHash = PasswordHasher.HashPassword("admin123");
         var adminExists = await db.ExecuteScalarAsync<int>("SELECT COUNT(1) FROM users WHERE username = 'admin';");
@@ -424,6 +425,16 @@ public static class DbInitializer
                 });
             }
         }
+
+        // Seed default full permissions for Admin users
+        var seedAdminMenuPermsSql = @"
+            INSERT INTO user_menu_permissions (user_id, menu_id, is_read, is_create, is_update, is_delete, is_import, is_export, created_at)
+            SELECT u.id, m.id, m.is_read, m.is_create, m.is_update, m.is_delete, m.is_import, m.is_export, CURRENT_TIMESTAMP
+            FROM users u
+            CROSS JOIN menus m
+            WHERE u.role ILIKE 'Admin' AND m.deleted_at IS NULL AND m.endpoint IS NOT NULL
+            ON CONFLICT (user_id, menu_id) DO NOTHING;";
+        await db.ExecuteAsync(seedAdminMenuPermsSql);
 
         // Seed 10 Jobs
         var seedJobsSql = @"

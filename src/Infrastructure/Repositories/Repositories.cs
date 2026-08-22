@@ -684,6 +684,11 @@ public class MenuManagementRepository
     public async Task<List<UserMenuPermissionNodeDto>> GetUserMenuPermissionsTreeAsync(long userId, CancellationToken ct = default)
     {
         using var conn = _db.CreateConnection();
+        var targetUserRole = await conn.ExecuteScalarAsync<string>(
+            "SELECT role FROM users WHERE id = @userId AND deleted_at IS NULL;",
+            new { userId });
+        var isTargetAdmin = string.Equals(targetUserRole, "Admin", StringComparison.OrdinalIgnoreCase);
+
         const string sql = @"
             SELECT 
                 m.id AS menuid,
@@ -713,29 +718,35 @@ public class MenuManagementRepository
 
         var rows = (await conn.QueryAsync(new CommandDefinition(sql, new { userId }, cancellationToken: ct))).ToList();
 
-        var nodes = rows.Select(r => new UserMenuPermissionNodeDto
+        var nodes = rows.Select(r =>
         {
-            MenuId = (long)r.menuid,
-            ParentId = r.parentid != null ? (long)r.parentid : null,
-            NameTh = (string)r.nameth,
-            NameEn = (string)r.nameen,
-            Endpoint = (string?)r.endpoint,
-            Seq = (int)r.seq,
-            IsPublic = (bool)r.ispublic,
-            IsMarketing = (bool)r.ismarketing,
-            CanRead = (bool)r.canread,
-            CanCreate = (bool)r.cancreate,
-            CanUpdate = (bool)r.canupdate,
-            CanDelete = (bool)r.candelete,
-            CanImport = (bool)r.canimport,
-            CanExport = (bool)r.canexport,
-            IsRead = (bool)r.isread,
-            IsCreate = (bool)r.iscreate,
-            IsUpdate = (bool)r.isupdate,
-            IsDelete = (bool)r.isdelete,
-            IsImport = (bool)r.isimport,
-            IsExport = (bool)r.isexport,
-            Children = []
+            var ep = (string?)r.endpoint;
+            var isLockedAdminMenu = isTargetAdmin && (ep == "/menu-managements" || ep == "/menu-managements/permissions");
+
+            return new UserMenuPermissionNodeDto
+            {
+                MenuId = (long)r.menuid,
+                ParentId = r.parentid != null ? (long)r.parentid : null,
+                NameTh = (string)r.nameth,
+                NameEn = (string)r.nameen,
+                Endpoint = ep,
+                Seq = (int)r.seq,
+                IsPublic = (bool)r.ispublic,
+                IsMarketing = (bool)r.ismarketing,
+                CanRead = (bool)r.canread,
+                CanCreate = (bool)r.cancreate,
+                CanUpdate = (bool)r.canupdate,
+                CanDelete = (bool)r.candelete,
+                CanImport = (bool)r.canimport,
+                CanExport = (bool)r.canexport,
+                IsRead = isLockedAdminMenu || (bool)r.isread,
+                IsCreate = isLockedAdminMenu || (bool)r.iscreate,
+                IsUpdate = isLockedAdminMenu || (bool)r.isupdate,
+                IsDelete = isLockedAdminMenu || (bool)r.isdelete,
+                IsImport = isLockedAdminMenu || (bool)r.isimport,
+                IsExport = isLockedAdminMenu || (bool)r.isexport,
+                Children = []
+            };
         }).ToList();
 
         var childrenByParent = nodes
@@ -763,6 +774,11 @@ public class MenuManagementRepository
             await dbConn.OpenAsync(ct);
         }
 
+        var targetUserRole = await conn.ExecuteScalarAsync<string>(
+            "SELECT role FROM users WHERE id = @userId AND deleted_at IS NULL;",
+            new { userId });
+        var isTargetAdmin = string.Equals(targetUserRole, "Admin", StringComparison.OrdinalIgnoreCase);
+
         using var transaction = conn.BeginTransaction();
         try
         {
@@ -784,21 +800,62 @@ public class MenuManagementRepository
                     is_export = EXCLUDED.is_export,
                     updated_at = CURRENT_TIMESTAMP;";
 
+            var lockedMenuIds = new HashSet<long>();
+            if (isTargetAdmin)
+            {
+                var adminMenuIds = await conn.QueryAsync<long>(@"
+                    SELECT id FROM menus 
+                    WHERE deleted_at IS NULL AND endpoint IN ('/menu-managements', '/menu-managements/permissions');",
+                    transaction: transaction);
+                foreach (var id in adminMenuIds) lockedMenuIds.Add(id);
+            }
+
+            var processedMenuIds = new HashSet<long>();
+
             foreach (var perm in permissions)
             {
+                var isLocked = lockedMenuIds.Contains(perm.MenuId);
+                var isRead = isLocked || perm.IsRead;
+                var isCreate = isLocked || perm.IsCreate;
+                var isUpdate = isLocked || perm.IsUpdate;
+                var isDelete = isLocked || perm.IsDelete;
+                var isImport = isLocked || perm.IsImport;
+                var isExport = isLocked || perm.IsExport;
+
+                processedMenuIds.Add(perm.MenuId);
+
                 // Only insert if at least one permission is true
-                if (perm.IsRead || perm.IsCreate || perm.IsUpdate || perm.IsDelete || perm.IsImport || perm.IsExport)
+                if (isRead || isCreate || isUpdate || isDelete || isImport || isExport)
                 {
                     await conn.ExecuteAsync(new CommandDefinition(insertSql, new
                     {
                         UserId = userId,
                         perm.MenuId,
-                        perm.IsRead,
-                        perm.IsCreate,
-                        perm.IsUpdate,
-                        perm.IsDelete,
-                        perm.IsImport,
-                        perm.IsExport
+                        IsRead = isRead,
+                        IsCreate = isCreate,
+                        IsUpdate = isUpdate,
+                        IsDelete = isDelete,
+                        IsImport = isImport,
+                        IsExport = isExport
+                    }, transaction: transaction, cancellationToken: ct));
+                }
+            }
+
+            // Ensure any locked admin menus not sent in payload are still inserted
+            foreach (var lockedId in lockedMenuIds)
+            {
+                if (!processedMenuIds.Contains(lockedId))
+                {
+                    await conn.ExecuteAsync(new CommandDefinition(insertSql, new
+                    {
+                        UserId = userId,
+                        MenuId = lockedId,
+                        IsRead = true,
+                        IsCreate = true,
+                        IsUpdate = true,
+                        IsDelete = true,
+                        IsImport = true,
+                        IsExport = true
                     }, transaction: transaction, cancellationToken: ct));
                 }
             }
@@ -843,50 +900,49 @@ public class MenuManagementRepository
 
         var rows = (await conn.QueryAsync(new CommandDefinition(sql, new { userId }, cancellationToken: ct))).ToList();
 
-        var allItems = rows.Select(r => new
+        var allItems = rows.Select(r =>
         {
-            Id = (long)r.id,
-            ParentId = r.parentid != null ? (long)r.parentid : (long?)null,
-            NameTh = (string)r.nameth,
-            NameEn = (string)r.nameen,
-            Endpoint = (string?)r.endpoint,
-            MenuType = (int)r.menutype,
-            ExternalUrl = (string?)r.externalurl,
-            TargetPath = (string?)r.targetpath,
-            OpenMode = (int)r.openmode,
-            Seq = (int)r.seq,
-            IsPublic = (bool)r.ispublic,
-            IsRead = isAdmin || (bool)r.isread || (bool)r.ispublic,
-            IsCreate = isAdmin || (bool)r.iscreate,
-            IsUpdate = isAdmin || (bool)r.isupdate,
-            IsDelete = isAdmin || (bool)r.isdelete,
-            IsImport = isAdmin || (bool)r.isimport,
-            IsExport = isAdmin || (bool)r.isexport,
+            var ep = (string?)r.endpoint;
+            var isLockedAdminMenu = isAdmin && (ep == "/menu-managements" || ep == "/menu-managements/permissions");
+
+            return new
+            {
+                Id = (long)r.id,
+                ParentId = r.parentid != null ? (long)r.parentid : (long?)null,
+                NameTh = (string)r.nameth,
+                NameEn = (string)r.nameen,
+                Endpoint = ep,
+                MenuType = (int)r.menutype,
+                ExternalUrl = (string?)r.externalurl,
+                TargetPath = (string?)r.targetpath,
+                OpenMode = (int)r.openmode,
+                Seq = (int)r.seq,
+                IsPublic = (bool)r.ispublic,
+                IsRead = isLockedAdminMenu || (bool)r.isread || (bool)r.ispublic,
+                IsCreate = isLockedAdminMenu || (bool)r.iscreate,
+                IsUpdate = isLockedAdminMenu || (bool)r.isupdate,
+                IsDelete = isLockedAdminMenu || (bool)r.isdelete,
+                IsImport = isLockedAdminMenu || (bool)r.isimport,
+                IsExport = isLockedAdminMenu || (bool)r.isexport,
+            };
         }).ToList();
 
-        // If not admin, collect IDs of all menus where IsRead is true, PLUS their parent ancestors
+        // Collect IDs of all menus where IsRead is true, PLUS their parent ancestors
         var accessibleIds = new HashSet<long>();
-        if (isAdmin)
+        var itemMap = allItems.ToDictionary(i => i.Id);
+        foreach (var item in allItems.Where(i => i.IsRead))
         {
-            foreach (var item in allItems) accessibleIds.Add(item.Id);
-        }
-        else
-        {
-            var itemMap = allItems.ToDictionary(i => i.Id);
-            foreach (var item in allItems.Where(i => i.IsRead))
+            var current = item;
+            while (current != null)
             {
-                var current = item;
-                while (current != null)
+                accessibleIds.Add(current.Id);
+                if (current.ParentId != null && itemMap.TryGetValue(current.ParentId.Value, out var parent))
                 {
-                    accessibleIds.Add(current.Id);
-                    if (current.ParentId != null && itemMap.TryGetValue(current.ParentId.Value, out var parent))
-                    {
-                        current = parent;
-                    }
-                    else
-                    {
-                        break;
-                    }
+                    current = parent;
+                }
+                else
+                {
+                    break;
                 }
             }
         }
@@ -930,5 +986,43 @@ public class MenuManagementRepository
 
         return BuildNavTree(0);
     }
-}
 
+    public async Task<bool> HasMenuPermissionAsync(long userId, string role, string endpoint, string action = "read", CancellationToken ct = default)
+    {
+        if (userId <= 0 || string.IsNullOrWhiteSpace(endpoint))
+        {
+            return false;
+        }
+
+        var cleanEp = endpoint.Trim().ToLowerInvariant();
+        var isAdmin = string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+
+        // Core admin menus always granted to Admin role
+        if (isAdmin && (cleanEp == "/menu-managements" || cleanEp == "/menu-managements/permissions"))
+        {
+            return true;
+        }
+
+        using var conn = _db.CreateConnection();
+        var actionCol = action.ToLowerInvariant() switch
+        {
+            "create" => "ump.is_create",
+            "update" => "ump.is_update",
+            "delete" => "ump.is_delete",
+            "import" => "ump.is_import",
+            "export" => "ump.is_export",
+            _ => "ump.is_read"
+        };
+
+        var sql = $@"
+            SELECT COUNT(1)
+            FROM menus m
+            LEFT JOIN user_menu_permissions ump ON ump.menu_id = m.id AND ump.user_id = @userId
+            WHERE m.deleted_at IS NULL 
+              AND LOWER(m.endpoint) = @cleanEp
+              AND (m.is_public = TRUE OR {actionCol} = TRUE);";
+
+        var count = await conn.ExecuteScalarAsync<int>(new CommandDefinition(sql, new { userId, cleanEp }, cancellationToken: ct));
+        return count > 0;
+    }
+}

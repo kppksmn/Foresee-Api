@@ -48,8 +48,13 @@ public static class AdminEndpoints
 
     private static void RegisterAdminRoutes(RouteGroupBuilder group)
     {
-        group.MapPost("/jobs", async ([FromBody] CreateJobDto req, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
+        group.MapPost("/jobs", async ([FromBody] CreateJobDto req, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "create", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการสร้างงานใหม่ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var scheduledStartAtUtc = NormalizeToUtc(req.ScheduledStartAt);
 
@@ -165,8 +170,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .WithSummary("สร้างงานขนส่งใหม่ (Create Job)");
 
-        group.MapPost("/jobs/{jobId:long}/assign", async (long jobId, [FromBody] AssignJobDto req, ICurrentUser user, DbConnectionFactory db, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
+        group.MapPost("/jobs/{jobId:long}/assign", async (long jobId, [FromBody] AssignJobDto req, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "update", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการมอบหมายงาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var jobInfo = await conn.QueryFirstOrDefaultAsync(@"
                 SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", job_number AS ""jobNumber"", title, pickup_location AS ""pickupLocation"", scheduled_start_at AS ""scheduledStartAt"" 
@@ -230,7 +240,7 @@ public static class AdminEndpoints
                 jobId, 
                 req.DriverId, 
                 req.VehicleId, 
-                CompanionId = req.CompanionId,
+                CompanionId = req.CompanionId, 
                 HasCompanionParam = req.CompanionId.HasValue,
                 Now = DateTime.UtcNow, 
                 user.UserId 
@@ -265,8 +275,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("มอบหมายงานให้คนขับ (Assign Job)");
 
-        group.MapPost("/jobs/{jobId:long}/cancel", async (long jobId, [FromBody] CancelJobDto req, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
+        group.MapPost("/jobs/{jobId:long}/cancel", async (long jobId, [FromBody] CancelJobDto req, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "update", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการยกเลิกงาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var jobInfo = await conn.QueryFirstOrDefaultAsync(@"
                 SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", job_number AS ""jobNumber"", title, status 
@@ -314,8 +329,14 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .WithSummary("ยกเลิกงาน (Cancel Job)");
 
-        group.MapGet("/users", async ([FromQuery] string? search, DbConnectionFactory db, CancellationToken ct) =>
+        group.MapGet("/users", async ([FromQuery] string? search, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
+            var isUserAdmin = string.Equals(user.Role, "Admin", StringComparison.OrdinalIgnoreCase);
+            if (!isUserAdmin && !await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/users", "read", ct) && !await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/menu-managements/permissions", "read", ct))
+            {
+                return Results.Json(ApiResponse<IEnumerable<AdminUserListItemDto>>.Fail("คุณไม่มีสิทธิ์เข้าถึงรายชื่อผู้ใช้งาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var sql = @"
                 SELECT u.id, u.username, u.role, u.is_active AS ""isActive"",
@@ -350,8 +371,14 @@ public static class AdminEndpoints
         .Produces<ApiResponse<IEnumerable<AdminUserListItemDto>>>(StatusCodes.Status200OK)
         .WithSummary("ดึงรายชื่อผู้ใช้งานทั้งหมด (List Users)");
 
-        group.MapGet("/jobs", async ([FromQuery] string? search, [FromQuery] string? status, [FromQuery] string? mode, DbConnectionFactory db, CancellationToken ct) =>
+        group.MapGet("/jobs", async ([FromQuery] string? search, [FromQuery] string? status, [FromQuery] string? mode, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
+            var targetEp = mode == "history" ? "/jobs/history" : "/jobs";
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, targetEp, "read", ct))
+            {
+                return Results.Json(ApiResponse<AdminJobListResponseDto>.Fail("คุณไม่มีสิทธิ์เข้าถึงรายการงาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var sql = @"
                 SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
@@ -438,8 +465,14 @@ public static class AdminEndpoints
         .Produces<ApiResponse<IEnumerable<AdminJobListItemDto>>>(StatusCodes.Status200OK)
         .WithSummary("ดึงรายการงานขนส่งทั้งหมด (List Jobs)");
 
-        async Task<IResult> HandleAdminJobListPostAsync([FromBody] AdminJobListRequestDto? req, DbConnectionFactory db, CancellationToken ct)
+        async Task<IResult> HandleAdminJobListPostAsync([FromBody] AdminJobListRequestDto? req, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct)
         {
+            var targetEp = req?.Mode == "history" ? "/jobs/history" : "/jobs";
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, targetEp, "read", ct))
+            {
+                return Results.Json(ApiResponse<AdminJobListResponseDto>.Fail("คุณไม่มีสิทธิ์เข้าถึงรายการงาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var search = req?.Search;
             var status = req?.Status;
@@ -570,8 +603,14 @@ public static class AdminEndpoints
         .Produces<ApiResponse<AdminJobListResponseDto>>(StatusCodes.Status200OK)
         .WithSummary("ดึงรายการงานขนส่งทั้งหมดแบบ POST Body ส่ง offset (/jobs/all)");
 
-        group.MapGet("/jobs/{id:long}", async (long id, DbConnectionFactory db, CancellationToken ct) =>
+        group.MapGet("/jobs/{id:long}", async (long id, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "read", ct) &&
+                !await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs/history", "read", ct))
+            {
+                return Results.Json(ApiResponse<AdminJobListItemDto>.Fail("คุณไม่มีสิทธิ์เข้าถึงข้อมูลงานนี้ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var sql = @"
                 SELECT j.id, j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.vehicle_id AS ""vehicleId"", j.status,
@@ -642,8 +681,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("ดึงรายละเอียดงานตาม ID (Get Job by ID)");
 
-        group.MapPut("/jobs/{id:long}", async (long id, [FromBody] UpdateJobDto req, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
+        group.MapPut("/jobs/{id:long}", async (long id, [FromBody] UpdateJobDto req, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "update", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการแก้ไขข้อมูลงาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var oldJobSql = @"
                 SELECT j.job_number AS ""jobNumber"", j.title, j.description, j.driver_id AS ""driverId"", j.companion_id AS ""companionId"", j.vehicle_id AS ""vehicleId"", j.status,
@@ -936,8 +980,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("แก้ไขข้อมูลงาน (Update Job)");
 
-        group.MapDelete("/jobs/{id:long}", async (long id, ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
+        group.MapDelete("/jobs/{id:long}", async (long id, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "delete", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการลบงาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var jobInfo = await conn.QueryFirstOrDefaultAsync(@"
                 SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", job_number AS ""jobNumber"", title, status 
@@ -981,8 +1030,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("ลบงาน (Delete Job)");
 
-        group.MapDelete("/jobs/all", async (ICurrentUser user, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
+        group.MapDelete("/jobs/all", async (ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, Infrastructure.Services.PushNotificationService pushNotificationService, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/jobs", "delete", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการลบงานทั้งหมด (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var activeJobs = (await conn.QueryAsync(@"
                 SELECT driver_id AS ""driverId"", companion_id AS ""companionId"", id, job_number AS ""jobNumber"", title 
@@ -1018,8 +1072,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<object>>(StatusCodes.Status200OK)
         .WithSummary("ลบงานทั้งหมด (Delete All Jobs)");
 
-        group.MapGet("/audit-logs", async ([FromQuery] string? search, [FromQuery] long? userId, [FromQuery] string? entityName, [FromQuery] string? startDate, [FromQuery] string? endDate, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, DbConnectionFactory db = null!, CancellationToken ct = default) =>
+        group.MapGet("/audit-logs", async ([FromQuery] string? search, [FromQuery] long? userId, [FromQuery] string? entityName, [FromQuery] string? startDate, [FromQuery] string? endDate, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, ICurrentUser user = null!, MenuManagementRepository menuRepo = null!, DbConnectionFactory db = null!, CancellationToken ct = default) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/audit-logs", "read", ct))
+            {
+                return Results.Json(ApiResponse<object>.Fail("คุณไม่มีสิทธิ์เข้าถึง Audit Logs (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             if (page < 1) page = 1;
             if (pageSize < 1) pageSize = 20;
             if (pageSize > 100) pageSize = 100;
@@ -1214,8 +1273,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<IEnumerable<AdminVehicleListItemDto>>>(StatusCodes.Status200OK)
         .WithSummary("ดึงรายการรถที่ว่างพร้อมใช้งาน (Available Vehicles)");
 
-        group.MapPost("/users", async ([FromBody] CreateUserDto req, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapPost("/users", async ([FromBody] CreateUserDto req, ICurrentUser currentUser, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(currentUser.UserId, currentUser.Role, "/users", "create", ct))
+            {
+                return Results.Json(ApiResponse<CreatedUserResponseDto>.Fail("คุณไม่มีสิทธิ์ในการสร้างผู้ใช้งานใหม่ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var userRepo = new UserRepository(db);
             var profileRepo = new UserProfileRepository(db);
@@ -1343,8 +1407,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .WithSummary("เพิ่มผู้ใช้งาน / พนักงานใหม่ (Create User)");
 
-        group.MapPut("/users/{userId:long}", async (long userId, [FromBody] UpdateUserDto req, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapPut("/users/{userId:long}", async (long userId, [FromBody] UpdateUserDto req, ICurrentUser currentUser, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(currentUser.UserId, currentUser.Role, "/users", "update", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการแก้ไขข้อมูลผู้ใช้งาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var userRepo = new UserRepository(db);
 
@@ -1571,8 +1640,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("แก้ไขข้อมูลผู้ใช้งาน (Update User)");
 
-        group.MapDelete("/users/{userId:long}", async (long userId, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapDelete("/users/{userId:long}", async (long userId, ICurrentUser currentUser, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(currentUser.UserId, currentUser.Role, "/users", "delete", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการลบผู้ใช้งาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             if (currentUser.UserId == userId)
             {
                 return Results.BadRequest(ApiResponse<string>.Fail("ไม่สามารถลบบัญชีผู้ใช้งานของตนเองได้"));
@@ -1615,8 +1689,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("ลบผู้ใช้งาน (Delete User)");
 
-        group.MapPost("/users/{userId:long}/reset-password", async (long userId, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapPost("/users/{userId:long}/reset-password", async (long userId, ICurrentUser currentUser, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(currentUser.UserId, currentUser.Role, "/users", "update", ct))
+            {
+                return Results.Json(ApiResponse<object>.Fail("คุณไม่มีสิทธิ์ในการรีเซ็ตรหัสผ่านผู้ใช้งาน (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var userSql = @"
                 SELECT u.id, u.username, u.role,
@@ -1660,10 +1739,16 @@ public static class AdminEndpoints
 
         group.MapGet("/users/{userId:long}/menu-permissions", async (
             long userId, 
+            ICurrentUser currentUser,
             MenuManagementRepository menuRepo, 
             DbConnectionFactory db,
             CancellationToken ct) =>
         {
+            if (!string.Equals(currentUser.Role, "Admin", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Json(ApiResponse<List<UserMenuPermissionNodeDto>>.Fail("เฉพาะผู้ดูแลระบบ (Admin) เท่านั้นที่สามารถดูสิทธิ์เมนูได้"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var userExists = await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(1) FROM users WHERE id = @userId AND deleted_at IS NULL;", new { userId });
@@ -1685,6 +1770,11 @@ public static class AdminEndpoints
             DbConnectionFactory db,
             CancellationToken ct) =>
         {
+            if (!string.Equals(currentUser.Role, "Admin", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Json(ApiResponse<string>.Fail("เฉพาะผู้ดูแลระบบ (Admin) เท่านั้นที่สามารถกำหนดสิทธิ์เมนูได้"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var targetUserSql = @"
                 SELECT u.username,
@@ -1708,8 +1798,13 @@ public static class AdminEndpoints
         .WithSummary("บันทึกสิทธิ์เมนูของผู้ใช้งานรายบุคคล (Update User Menu Permissions)");
 
         // Vehicles Endpoints
-        group.MapGet("/vehicles", async ([FromQuery] string? search, DbConnectionFactory db, CancellationToken ct) =>
+        group.MapGet("/vehicles", async ([FromQuery] string? search, ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/vehicles", "read", ct))
+            {
+                return Results.Json(ApiResponse<IEnumerable<AdminVehicleListItemDto>>.Fail("คุณไม่มีสิทธิ์เข้าถึงข้อมูลยานพาหนะ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var sql = @"
                 SELECT v.id,
@@ -1742,8 +1837,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<IEnumerable<AdminVehicleListItemDto>>>(StatusCodes.Status200OK)
         .WithSummary("ดึงรายการยานพาหนะทั้งหมด (List Vehicles)");
 
-        group.MapPost("/vehicles", async ([FromBody] CreateVehicleDto req, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapPost("/vehicles", async ([FromBody] CreateVehicleDto req, ICurrentUser currentUser, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(currentUser.UserId, currentUser.Role, "/vehicles", "create", ct))
+            {
+                return Results.Json(ApiResponse<CreatedEntityResponseDto>.Fail("คุณไม่มีสิทธิ์ในการเพิ่มข้อมูลยานพาหนะ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             if (string.IsNullOrWhiteSpace(req.PlateNumber))
                 return Results.BadRequest(ApiResponse<string>.Fail("กรุณากรอกทะเบียนรถ"));
 
@@ -1792,8 +1892,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status400BadRequest)
         .WithSummary("เพิ่มยานพาหนะใหม่ (Create Vehicle)");
 
-        group.MapPut("/vehicles/{id:long}", async (long id, [FromBody] UpdateVehicleDto req, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapPut("/vehicles/{id:long}", async (long id, [FromBody] UpdateVehicleDto req, ICurrentUser currentUser, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(currentUser.UserId, currentUser.Role, "/vehicles", "update", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการแก้ไขข้อมูลยานพาหนะ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var oldVehicleSql = @"
                 SELECT v.plate_number AS ""plateNumber"", v.model, v.capacity, v.is_active AS ""isActive"", vt.name AS ""vehicleType""
@@ -1874,8 +1979,13 @@ public static class AdminEndpoints
         .Produces<ApiResponse<string>>(StatusCodes.Status404NotFound)
         .WithSummary("แก้ไขข้อมูลยานพาหนะ (Update Vehicle)");
 
-        group.MapDelete("/vehicles/{id:long}", async (long id, ICurrentUser currentUser, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
+        group.MapDelete("/vehicles/{id:long}", async (long id, ICurrentUser currentUser, MenuManagementRepository menuRepo, DbConnectionFactory db, AuditLogRepository auditRepo, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(currentUser.UserId, currentUser.Role, "/vehicles", "delete", ct))
+            {
+                return Results.Json(ApiResponse<string>.Fail("คุณไม่มีสิทธิ์ในการลบข้อมูลยานพาหนะ (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
             var plateNumber = await conn.ExecuteScalarAsync<string>("SELECT plate_number FROM vehicles WHERE id = @id;", new { id });
             var deleteSql = @"
@@ -1896,8 +2006,13 @@ public static class AdminEndpoints
         .WithSummary("ลบข้อมูลยานพาหนะ (Delete Vehicle)");
 
         // Dashboard Endpoint
-        group.MapGet("/dashboard", async (DbConnectionFactory db, CancellationToken ct) =>
+        group.MapGet("/dashboard", async (ICurrentUser user, MenuManagementRepository menuRepo, DbConnectionFactory db, CancellationToken ct) =>
         {
+            if (!await menuRepo.HasMenuPermissionAsync(user.UserId, user.Role, "/dashboard", "read", ct))
+            {
+                return Results.Json(ApiResponse<DashboardSummaryResponseDto>.Fail("คุณไม่มีสิทธิ์เข้าถึงหน้าแดชบอร์ด (Permission Denied)"), statusCode: StatusCodes.Status403Forbidden);
+            }
+
             using var conn = db.CreateConnection();
 
             var totalJobsToday = await conn.ExecuteScalarAsync<int>(@"
